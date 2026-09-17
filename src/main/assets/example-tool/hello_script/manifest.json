@@ -1,0 +1,15 @@
+{
+  "name": "hello_script",
+  "description": "Example user-installed script tool: echoes its arguments back as JSON. Reference for writing your own tools.",
+  "inputSchema": {
+    "type": "object",
+    "required": ["message"],
+    "properties": {
+      "message": { "type": "string", "description": "text to echo back" },
+      "upper": { "type": "boolean", "description": "uppercase the echo" }
+    }
+  },
+  "priceSats": 1,
+  "output": "text",
+  "timeoutSecs": 30
+}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+        The generated UniFFI Kotlin bindings reference java.lang.ref.Cleaner,
+        which is only available on API 33+. The runtime guard in the generated
+        file falls back to a weak-reference cleaner on older API levels, so this
+        is a known false positive for our minSdk 24. Suppress only in the
+        generated seam, not across the whole project.
+    -->
+    <issue id="NewApi">
+        <ignore path="src/main/java/uniffi/contextvm_ffi/contextvm_ffi.kt" />
+    </issue>
+</lint>

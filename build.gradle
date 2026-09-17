@@ -1,0 +1,148 @@
+plugins {
+    id 'com.android.application' version '8.13.2'
+    id 'org.jetbrains.kotlin.android' version '2.3.21'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.3.21'
+}
+
+def appVersionName = "0.1.0"
+
+base {
+    archivesName = "hench-$appVersionName"
+}
+
+def loadBundledBreezApiKey = {
+    def bundledKeyFile = rootProject.file('breez.txt')
+    if (!bundledKeyFile.exists()) {
+        throw new GradleException("Missing breez.txt at repository root; hench APK requires a bundled Breez Spark API key")
+    }
+
+    def line = bundledKeyFile.readLines()
+            .collect { it.trim() }
+            .find { !it.isEmpty() && !it.startsWith('#') }
+    if (line == null || line.isEmpty()) {
+        throw new GradleException("breez.txt is empty; hench APK requires a bundled Breez Spark API key")
+    }
+
+    if (line.startsWith('BREEZ_API_KEY=')) {
+        line = line.substring('BREEZ_API_KEY='.length()).trim()
+    }
+    if ((line.startsWith('"') && line.endsWith('"')) || (line.startsWith("'") && line.endsWith("'"))) {
+        line = line.substring(1, line.length() - 1).trim()
+    }
+    if (line.isEmpty()) {
+        throw new GradleException("breez.txt did not contain a usable Breez Spark API key")
+    }
+    return line
+}
+
+def quoteBuildConfigString = { value ->
+    '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+}
+
+android {
+    namespace = 'net.nostr.hench'
+    compileSdk = 36
+    buildToolsVersion = "36.0.0"
+
+    defaultConfig {
+        applicationId = "net.nostr.hench"
+        minSdk = 24
+        targetSdk = 36
+        versionCode = 1
+        versionName = appVersionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // arm64-v8a for real devices; x86_64 for emulators / CI.
+        // x86_64 cannot run the bundled Python/curl_cffi — only the CVM FFI +
+        // transport + tool registry. Real download_media is arm64-only.
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+        buildConfigField "String", "BREEZ_SPARK_API_KEY", quoteBuildConfigString(loadBundledBreezApiKey())
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            minifyEnabled = false
+            debuggable = true
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled = true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    packagingOptions {
+        jniLibs {
+            // YoutubeDL library initializes Python/FFmpeg/aria2c by reading .zip.so files
+            // from nativeLibraryDir (not assets). Keep them extracted to disk.
+            useLegacyPackaging = true
+            keepDebugSymbols += [
+                    '**/libaria2c.so',
+                    '**/libaria2c.zip.so',
+                    '**/libbreez_sdk_spark_bindings.so',
+                    '**/libc++_shared.so',
+                    '**/libcontextvm_ffi.so',
+                    '**/libffmpeg.so',
+                    '**/libffmpeg.zip.so',
+                    '**/libffprobe.so',
+                    '**/libjnidispatch.so',
+                    '**/libpython.so',
+                    '**/libpython.zip.so',
+                    '**/libqjs.so',
+            ]
+        }
+        // libc++_shared.so is provided by both our modified youtubedl-android AAR
+        // and the Breez Spark SDK. Pick the first one found.
+        pickFirst 'lib/arm64-v8a/libc++_shared.so'
+    }
+
+    lint {
+        disable 'MissingTranslation', 'SetTextI18n'
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs_nio:2.1.5"
+
+    implementation "androidx.core:core-ktx:1.18.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0"
+    implementation "com.squareup.okhttp3:okhttp:5.4.0"
+
+    // UniFFI Kotlin binding for libcontextvm_ffi (generated, uses JNA).
+    implementation "net.java.dev.jna:jna:5.18.0@aar"
+    implementation "breez_sdk_spark:bindings-android:0.23.1"
+
+    // Keep the proven auto-updating yt-dlp runtime stack available in the minimal app.
+    implementation "io.github.junkfood02.youtubedl-android:library:0.18.1"
+    implementation "io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1"
+    implementation "io.github.junkfood02.youtubedl-android:aria2c:0.18.1"
+
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0"
+    androidTestImplementation "androidx.test.ext:junit:1.3.0"
+    androidTestImplementation "androidx.test.espresso:espresso-core:3.7.0"
+}
+
+// NOTE: The old extractBundledPackageAssets task that copied .zip.so files into
+// assets/bundled/ was removed. The youtubedl-android library reads .zip.so directly
+// from nativeLibraryDir (context.applicationInfo.nativeLibraryDir) — verified by
+// decompiling initPython/initFFmpeg in YoutubeDL.class and FFmpeg.class.
+// The assets/bundled/ copies were pure duplication (~55MB wasted).

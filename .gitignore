@@ -1,0 +1,23 @@
+# Local secrets
+breez.txt
+
+# Android and Gradle outputs
+.gradle/
+.kotlin/
+build/
+**/build/
+local.properties
+
+# IDE files
+.idea/
+*.iml
+
+# Packaged artifacts
+*.apk
+*.aab
+
+# Local binary drops that are not part of the public source release
+libs/*.aar
+
+# Agent-local notes
+.claude/
