@@ -72,7 +72,16 @@ class SparkLightningWalletTest {
     ) : SparkSdkClient {
         var lastAmountSats: ULong = 0uL
         var lastEnsureSynced: Boolean? = null
+        var pageCalls: Int = 0
+            private set
         private var invoice: String? = null
+
+        /** Extra history entries appended after the fresh invoice row, newest
+         *  first — used to prove lookups page past the newest window. */
+        var extraPayments: List<SparkPaymentSnapshot> = emptyList()
+
+        private fun allPayments(): List<SparkPaymentSnapshot> =
+            listOf(SparkPaymentSnapshot("payment-1", invoice, status)) + extraPayments
 
         override suspend fun receiveBolt11Invoice(amountSats: ULong, memo: String, expirySecs: UInt): String {
             lastAmountSats = amountSats
@@ -80,9 +89,13 @@ class SparkLightningWalletTest {
             return invoice!!
         }
 
-        override suspend fun listPayments(limit: UInt): List<SparkPaymentSnapshot> {
-            return listOf(SparkPaymentSnapshot("payment-1", invoice, status))
+        override suspend fun listPayments(limit: UInt, offset: UInt?): List<SparkPaymentSnapshot> {
+            pageCalls++
+            return allPayments().drop(offset?.toInt() ?: 0).take(limit.toInt())
         }
+
+        override suspend fun getPaymentOptional(paymentId: String): SparkPaymentSnapshot? =
+            allPayments().firstOrNull { it.id == paymentId }
 
         override suspend fun balanceSats(ensureSynced: Boolean): ULong {
             lastEnsureSynced = ensureSynced
@@ -90,9 +103,29 @@ class SparkLightningWalletTest {
         }
 
         override suspend fun payBolt11Invoice(invoice: String): WalletSendResult =
-            WalletSendResult(paymentId = "send-1", amountSats = 21)
+            WalletSendResult(paymentId = "send-1", amountSats = 21, preimage = "ab".repeat(32))
 
         override suspend fun payLightningAddress(address: String, amountSats: ULong, comment: String): WalletSendResult =
             WalletSendResult(paymentId = "lnaddr-1", amountSats = amountSats.toLong())
+    }
+
+    @Test
+    fun lookupInvoicePagesPastTheNewestWindow() = runTest {
+        // Regression: the old lookup listed only the latest 50 payments, so an
+        // invoice older than the newest window reported Unknown and the paid
+        // job never started. It must scan the full history now.
+        val client = FakeSparkSdkClient()
+        client.receiveBolt11Invoice(10uL, "fresh")
+        client.extraPayments = (1..150).map { i ->
+            SparkPaymentSnapshot(
+                id = "old-$i",
+                invoice = if (i == 140) "lnbc1targetinvoice" else "lnbc1other$i",
+                status = if (i == 140) InvoiceStatus.Settled else InvoiceStatus.Expired,
+            )
+        }
+        val wallet = SparkLightningWallet(client)
+
+        assertEquals(InvoiceStatus.Settled, wallet.lookupInvoice("lnbc1targetinvoice"))
+        assertTrue("lookup must page beyond the first window", client.pageCalls > 1)
     }
 }

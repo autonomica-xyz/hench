@@ -203,6 +203,7 @@ class CvmServer(
             // (FFI send failure, codec edge) may kill the process.
             runCatching {
                 when (ictx.method) {
+                "notifications/initialized" -> Unit
                 "tools/list" -> {
                     val result = toolsListResult(registry.toolsListJson())
                     s.sendResponse(ictx.transportEventId, mcpSuccess(ictx.jsonRpcId, result))
@@ -241,7 +242,7 @@ class CvmServer(
                     return
                 }
                 JobRecord.STATUS_PROCESSING -> {
-                    if (canonical != null && inFlight.contains(canonical)) {
+                    if (inFlight.contains(updateKey)) {
                         s.sendNotification(ctx.clientPubkey, progressEnvelope(ctx.jsonRpcId, null, "PROCESSING"), ctx.transportEventId)
                         return
                     }
@@ -250,7 +251,7 @@ class CvmServer(
             }
         }
 
-        if (canonical != null && !inFlight.add(canonical)) {
+        if (!inFlight.add(updateKey)) {
             s.sendNotification(ctx.clientPubkey, progressEnvelope(ctx.jsonRpcId, null, "PROCESSING"), ctx.transportEventId)
             return
         }
@@ -318,7 +319,7 @@ class CvmServer(
                 s.sendResponse(ctx.transportEventId, mcpSuccess(ctx.jsonRpcId, toolResult.toMcpResultJson()))
             }
         } finally {
-            canonical?.let { inFlight.remove(it) }
+            inFlight.remove(updateKey)
         }
     }
 

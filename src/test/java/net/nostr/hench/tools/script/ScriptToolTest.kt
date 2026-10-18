@@ -98,6 +98,32 @@ class ToolPackageManagerTest {
 
         assertEquals(listOf("good"), found.map { it.manifest.name })
     }
+
+    @Test
+    fun zipInstallRejectsTraversalAndAbsoluteEntries() {
+        val target = tmp.newFolder("tools")
+        val outside = tmp.newFolder("outside")
+        val escapee = File(outside, "evil.py")
+        val zip = java.io.ByteArrayOutputStream().also { bos ->
+            java.util.zip.ZipOutputStream(bos).use { zos ->
+                fun entry(name: String, body: String) {
+                    zos.putNextEntry(java.util.zip.ZipEntry(name))
+                    zos.write(body.toByteArray())
+                    zos.closeEntry()
+                }
+                entry("legit/manifest.json", defaultManifest("legit"))
+                entry("legit/script.py", "print('hi')\n")
+                entry("../outside/evil.py", "import os\n")
+                entry(escapee.absolutePath, "import os\n")
+            }
+        }
+
+        val installed = ToolPackageManager.installFromZip(target, zip.toByteArray().inputStream())
+
+        assertEquals(listOf(File(target, "legit")), installed)
+        assertTrue(File(target, "legit/script.py").isFile)
+        assertTrue("unsafe entries must not escape target", !escapee.exists())
+    }
 }
 
 class EnabledToolsSettingsTest {

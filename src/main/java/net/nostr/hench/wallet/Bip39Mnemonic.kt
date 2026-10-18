@@ -1,5 +1,6 @@
 package net.nostr.hench.wallet
 
+import java.math.BigInteger
 import java.security.MessageDigest
 
 fun sparkSeedBackupWords(seedHex: String): String = entropyToBip39Mnemonic(seedHex.hexToBytes())
@@ -43,12 +44,16 @@ fun deriveNostrSecretKeyHex(sparkSeedHex: String): String {
     var hash = MessageDigest.getInstance("SHA-256").let { md ->
         md.update(tag); md.update(entropy); md.digest()
     }
-    // 0 < scalar < curve order; retry (never triggers in practice)
-    while (hash.all { it == 0.toByte() }) {
+    // Valid secp256k1 scalar requires 0 < k < curve order, not just non-zero;
+    // retry (never triggers in practice) by hashing the hash again.
+    while (BigInteger(1, hash).let { it.signum() == 0 || it >= SECP256K1_N }) {
         hash = MessageDigest.getInstance("SHA-256").digest(hash)
     }
     return hash.joinToString("") { "%02x".format(it) }
 }
+
+private val SECP256K1_N =
+    BigInteger("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 
 /**
  * Accepts entropy hex OR 12/24 BIP-39 recovery words in the seed field;

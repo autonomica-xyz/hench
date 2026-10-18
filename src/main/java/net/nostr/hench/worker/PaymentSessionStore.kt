@@ -87,6 +87,13 @@ interface PaymentSessionStoreI {
 
     fun getPayment(canonicalInvocationId: String): PaymentRecord?
     fun allPayments(): List<PaymentRecord>
+
+    /**
+     * Remove a payment record. Callers MUST only use this for records the
+     * wallet has just confirmed are NOT settled — settled/dispatched records
+     * are replay protection and must never be deleted.
+     */
+    fun removePayment(canonicalInvocationId: String)
 }
 
 class InMemoryPaymentSessionStore : PaymentSessionStoreI {
@@ -108,19 +115,30 @@ class InMemoryPaymentSessionStore : PaymentSessionStoreI {
 
     override fun putPayment(record: PaymentRecord): Boolean {
         if (failPutPayment) return false
-        // Monotonic: SETTLED/DISPATCHED must never be downgraded by a racing
-        // writer (round-4 nit) — PENDING < SETTLED < DISPATCHED < FAILED.
+        // Monotonic: a racing writer cannot downgrade the persisted state —
+        // FAILED ranks below SETTLED so confirmed settlement heals a failed
+        // record, but a stale FAILED write never erases SETTLED/DISPATCHED.
         payments.merge(record.canonicalInvocationId, record) { old, new ->
             if (statusRank(new.status) >= statusRank(old.status)) new else old
         }
         return true
     }
 
+    /**
+     * FAILED ranks BELOW SETTLED: a record proven settled (by a late poll or
+     * a pruning wallet check) must heal a failed record, while a stale
+     * timeout's FAILED write must never erase a settled one.
+     */
     private fun statusRank(status: String) = when (status) {
         PaymentRecord.STATUS_PENDING -> 0
-        PaymentRecord.STATUS_SETTLED -> 1
-        PaymentRecord.STATUS_DISPATCHED -> 2
-        else -> 3
+        PaymentRecord.STATUS_FAILED -> 1
+        PaymentRecord.STATUS_SETTLED -> 2
+        PaymentRecord.STATUS_DISPATCHED -> 3
+        else -> 0
+    }
+
+    override fun removePayment(canonicalInvocationId: String) {
+        payments.remove(canonicalInvocationId)
     }
 
     override fun getPayment(canonicalInvocationId: String) = payments[canonicalInvocationId]
@@ -167,9 +185,11 @@ class PaymentSessionStore(context: Context) : PaymentSessionStoreI {
      * Synchronous, durable write of a payment record. The caller MUST have this
      * on disk before it calls `PaymentGateApi.submitInvoice`. Returns the commit
      * result.
-     * Monotonic: a racing writer cannot downgrade the persisted status
-     * (PENDING < SETTLED < DISPATCHED < FAILED).
-     */
+    * Monotonic: a racing writer cannot downgrade the persisted status
+    * (PENDING < FAILED < SETTLED < DISPATCHED — settled/dispatched are money
+    * states; FAILED is an unpaid terminal state, so a stale timeout write must
+    * not overwrite SETTLED while a proven settlement may heal FAILED).
+    */
     override fun putPayment(record: PaymentRecord): Boolean {
         @Synchronized
         fun commitMonotonic(): Boolean {
@@ -189,9 +209,19 @@ class PaymentSessionStore(context: Context) : PaymentSessionStoreI {
 
     private fun statusRank(status: String) = when (status) {
         PaymentRecord.STATUS_PENDING -> 0
-        PaymentRecord.STATUS_SETTLED -> 1
-        PaymentRecord.STATUS_DISPATCHED -> 2
-        else -> 3
+        PaymentRecord.STATUS_FAILED -> 1
+        PaymentRecord.STATUS_SETTLED -> 2
+        PaymentRecord.STATUS_DISPATCHED -> 3
+        else -> 0
+    }
+
+    /**
+     * Removes a payment record via `commit()`. Only for records verified
+     * unpaid — never drop settled/dispatched replay protection.
+     */
+    @Synchronized
+    override fun removePayment(canonicalInvocationId: String) {
+        paymentPrefs.edit().remove(canonicalInvocationId).commit()
     }
 
     override fun getPayment(canonicalInvocationId: String): PaymentRecord? =

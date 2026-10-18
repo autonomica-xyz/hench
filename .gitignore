@@ -18,6 +18,24 @@ local.properties
 
 # Local binary drops that are not part of the public source release
 libs/*.aar
+# Reproducible native build inputs/outputs (regenerate via native-*/build-*.sh)
+native-python/work/
+native-python/out/
+native-curl/work/
+native-curl/out/
+native-ffmpeg/work/
+native-ffmpeg/out/
+native-ffmpeg/work-deb/
+native-spark/vendor/
+native-spark/work/
+native-spark/out/
+native/target/
+native/arm64-v8a/
+native/x86_64/
+
+# hench-spark-bindings.aar is committed (patched upstream artifact); other
+# generated AARs stay ignored and are rebuilt from native-*/ recipes.
+!libs/hench-spark-bindings.aar
 
 # Agent-local notes
 .claude/

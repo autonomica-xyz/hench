@@ -26,4 +26,21 @@ object NwcServerStore {
             relays = settings.relayUrls,
         )
     }
+
+    /**
+     * Read-only variant of [loadOrCreate]: returns the stored connection only
+     * when both secrets already exist (i.e. the user created one). The worker
+     * service uses this to decide whether to run the NWC server — it must not
+     * create secrets as a side effect.
+     */
+    fun peek(context: Context, settings: WorkerSettings): NwcServerConnection? {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val walletSecret = prefs.getString(WALLET_SECRET, null)?.takeIf { it.isNotBlank() } ?: return null
+        val clientSecret = prefs.getString(CLIENT_SECRET, null)?.takeIf { it.isNotBlank() } ?: return null
+        return NwcServerConnection(
+            walletSecretHex = walletSecret,
+            clientSecretHex = clientSecret,
+            relays = settings.relayUrls,
+        )
+    }
 }

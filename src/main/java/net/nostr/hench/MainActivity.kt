@@ -21,7 +21,6 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import net.nostr.hench.auth.CookieStore
 import net.nostr.hench.dashboard.DashboardState
-import net.nostr.hench.settings.OnboardingDefaults
 import net.nostr.hench.service.WorkerForegroundService
 import net.nostr.hench.service.WorkerForegroundServiceContract
 import net.nostr.hench.settings.SharedPreferencesSettingsRepository
@@ -96,72 +95,6 @@ class MainActivity : Activity() {
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
     }
 
-    private fun renderOnboarding() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(56), dp(24), dp(28))
-            setBackgroundColor(Color.rgb(8, 9, 10))
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-        val scroll = ScrollView(this).apply {
-            setBackgroundColor(Color.rgb(8, 9, 10))
-            addView(root)
-        }
-
-        root.addView(TextView(this).apply {
-            text = "Turn this phone into a paid worker"
-            textSize = 30f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(247, 248, 248))
-            gravity = Gravity.CENTER
-        }, matchTop(dp(28)))
-
-        root.addView(TextView(this).apply {
-            text = "hench is a ContextVM worker. It exposes media download (and later other tools) as MCP tools over Nostr, uploads the finished file to Blossom, and settles payment over Lightning."
-            textSize = 16f
-            setTextColor(Color.rgb(178, 183, 192))
-            gravity = Gravity.CENTER
-            setLineSpacing(4f, 1.0f)
-        }, matchTop(dp(18)))
-
-        val steps = listOf(
-            "1. Create your native Spark wallet",
-            "2. Connect to the local job relay",
-            "3. Turn the worker on and earn sats per job",
-        )
-        root.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
-            background = rounded(Color.rgb(25, 26, 27), dp(18), Color.rgb(36, 40, 44))
-            steps.forEach { step ->
-                addView(TextView(this@MainActivity).apply {
-                    text = step
-                    textSize = 15f
-                    setTextColor(Color.rgb(247, 248, 248))
-                }, matchTop(dp(8)))
-            }
-        }, matchTop(dp(28)))
-
-        root.addView(Button(this).apply {
-            text = "Create wallet & turn worker on"
-            textSize = 18f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            background = rounded(Color.rgb(94, 106, 210), dp(18), null)
-            minHeight = dp(64)
-            setOnClickListener { completeOnboarding() }
-        }, matchTop(dp(30)))
-
-        root.addView(TextView(this).apply {
-            text = "After creating the wallet, open Settings and copy/export the Spark seed. It is the backup for this phone's earnings wallet."
-            textSize = 13f
-            setTextColor(Color.rgb(98, 102, 109))
-            gravity = Gravity.CENTER
-        }, matchTop(dp(14)))
-
-        setContentView(scroll)
-    }
-
     private fun renderFirstRunSetup() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -198,13 +131,6 @@ class MainActivity : Activity() {
             renderDashboard()
             syncWalletBalanceInBackground()
         }
-    }
-
-    private fun completeOnboarding() {
-        val settings = OnboardingDefaults.createFirstRunWorkerSettings(BuildConfig.BREEZ_SPARK_API_KEY)
-        settingsRepository.completeOnboarding(settings)
-        startOrStopWorker(true)
-        renderDashboard()
     }
 
     private fun renderDashboard() {

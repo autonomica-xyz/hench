@@ -1,0 +1,11 @@
+# Pinned upstream inputs for the curl_cffi Android source rebuild — every
+# download is verified by build-curl-cffi.sh (sha256sum -c). Do not change
+# without a new hash and a README note. Hashes verified 2026-10-18 against
+# PyPI JSON metadata (wheel, sdist, cffi, certifi) and the fetched GitHub
+# archive itself (curl-impersonate source). See README "Embedded library
+# provenance" for the dependency manifest.
+0c8b70191dc88ea770a5c39d7e213bff1606e248c13566777e6527f0d8cf96ec  curl_cffi-0.16.3-cp314-cp314-android_24_arm64_v8a.whl
+d15d0c2a35f2d75bec430c28946c2a833f421c85773bdb0795182cc5c515665b  curl_cffi-0.16.3.tar.gz
+dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be  cffi-2.1.1.tar.gz
+62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775  certifi-2026.7.22-py3-none-any.whl
+62a4a935e791276194974aa106fbaa0610a49353cb5f361b2c6277fcb8270b17  curl-impersonate-2.2.3.tar.gz

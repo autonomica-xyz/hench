@@ -1,14 +1,16 @@
 plugins {
-    id 'com.android.application' version '8.13.2'
-    id 'org.jetbrains.kotlin.android' version '2.3.21'
-    id 'org.jetbrains.kotlin.plugin.serialization' version '2.3.21'
+    // AGP 9 provides built-in Kotlin support — do not apply
+    // org.jetbrains.kotlin.android separately.
+    id 'com.android.application' version '9.4.1'
+    // Kotlinx serialization compiler plugin; version must match the Kotlin
+    // Gradle plugin (built-in Kotlin runtime, auto-upgraded to 2.4.21 here).
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.4.21'
 }
 
 def appVersionName = "0.1.0"
 
-base {
-    archivesName = "hench-$appVersionName"
-}
+// The old `base { archivesName }` block is gone: AGP 9 does not register the
+// `base` extension, and archive naming never affected the APK name anyway.
 
 def loadBundledBreezApiKey = {
     def bundledKeyFile = rootProject.file('breez.txt')
@@ -41,8 +43,8 @@ def quoteBuildConfigString = { value ->
 
 android {
     namespace = 'net.nostr.hench'
-    compileSdk = 36
-    buildToolsVersion = "36.0.0"
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "net.nostr.hench"
@@ -52,9 +54,8 @@ android {
         versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // arm64-v8a for real devices; x86_64 for emulators / CI.
-        // x86_64 cannot run the bundled Python/curl_cffi — only the CVM FFI +
-        // transport + tool registry. Real download_media is arm64-only.
+        // Both native runtimes include these ABIs; curl_cffi impersonation
+        // is arm64-only because its Android build targets arm64-v8a.
         ndk {
             abiFilters 'arm64-v8a', 'x86_64'
         }
@@ -83,20 +84,16 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = '17'
-    }
+    // Built-in Kotlin defaults jvmTarget to compileOptions.targetCompatibility
+    // (17), so no kotlin.compilerOptions block is needed.
 
-    packagingOptions {
+    packaging {
         jniLibs {
-            // YoutubeDL library initializes Python/FFmpeg/aria2c by reading .zip.so files
+            // YoutubeDL library initializes Python/FFmpeg by reading .zip.so files
             // from nativeLibraryDir (not assets). Keep them extracted to disk.
             useLegacyPackaging = true
             keepDebugSymbols += [
-                    '**/libaria2c.so',
-                    '**/libaria2c.zip.so',
                     '**/libbreez_sdk_spark_bindings.so',
-                    '**/libc++_shared.so',
                     '**/libcontextvm_ffi.so',
                     '**/libffmpeg.so',
                     '**/libffmpeg.zip.so',
@@ -107,9 +104,6 @@ android {
                     '**/libqjs.so',
             ]
         }
-        // libc++_shared.so is provided by both our modified youtubedl-android AAR
-        // and the Breez Spark SDK. Pick the first one found.
-        pickFirst 'lib/arm64-v8a/libc++_shared.so'
     }
 
     lint {
@@ -120,20 +114,33 @@ android {
 dependencies {
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs_nio:2.1.5"
 
-    implementation "androidx.core:core-ktx:1.18.0"
+    implementation "androidx.core:core-ktx:1.19.1"
+    implementation "androidx.webkit:webkit:1.17.1"
+
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"
     implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0"
-    implementation "com.squareup.okhttp3:okhttp:5.4.0"
+    implementation "com.squareup.okhttp3:okhttp:5.5.0"
 
     // UniFFI Kotlin binding for libcontextvm_ffi (generated, uses JNA).
-    implementation "net.java.dev.jna:jna:5.18.0@aar"
-    implementation "breez_sdk_spark:bindings-android:0.23.1"
+    implementation "net.java.dev.jna:jna:5.19.1@aar"
+    implementation files("libs/hench-spark-bindings.aar")
+    implementation "org.jetbrains.kotlinx:atomicfu:0.33.0"
+    implementation "androidx.credentials:credentials:1.6.0"
+    implementation "androidx.credentials:credentials-play-services-auth:1.6.0"
 
-    // Keep the proven auto-updating yt-dlp runtime stack available in the minimal app.
-    implementation "io.github.junkfood02.youtubedl-android:library:0.18.1"
-    implementation "io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1"
-    implementation "io.github.junkfood02.youtubedl-android:aria2c:0.18.1"
+    // Rebuilt native payloads; recipes and source pins live in native-*/.
+    implementation files("libs/hench-python-runtime.aar")
+    implementation files("libs/hench-ffmpeg-runtime.aar")
+    implementation "io.github.junkfood02.youtubedl-android:common:0.18.1"
+
+    // Local AARs do not carry POM dependencies; keep the wrappers' JVM
+    // dependencies explicit instead of restoring their vulnerable old pins.
+    implementation "com.fasterxml.jackson.core:jackson-databind:2.22.4"
+    implementation "commons-io:commons-io:2.22.0"
+    implementation "org.apache.commons:commons-compress:1.28.0"
+    implementation "org.tukaani:xz:1.12"
+    implementation "com.github.luben:zstd-jni:1.5.7-23@aar"
 
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0"

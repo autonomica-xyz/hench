@@ -18,14 +18,15 @@ import java.util.zip.ZipInputStream
  * like TikTok, Vimeo, Instagram, etc. that block standard Python urllib/requests.
  */
 object PythonPackageManager {
-    private var importTestResult: Boolean? = null
+    private var cachedCurlInstalled: Boolean? = null
     private const val TAG = "PythonPackageManager"
     private const val PREFS_NAME = "python_packages"
     private const val KEY_CURL_CFFI_VERSION = "curl_cffi_version"
     private const val KEY_YTDLP_VERSION = "ytdlp_version"
 
     /** Current curl_cffi version bundled as asset */
-    private const val BUNDLED_CURL_CFFI_VERSION = "0.15.0-patch4"
+    private const val BUNDLED_CURL_CFFI_VERSION = "0.16.3+hench.1"
+    private const val CFFI_BACKEND = "_cffi_backend.cpython-314-aarch64-linux-android.so"
 
     /** Current yt-dlp version bundled as asset */
     private const val BUNDLED_YTDLP_VERSION = "2026.08.19"
@@ -55,51 +56,46 @@ object PythonPackageManager {
         // Install curl_cffi
         val currentCurlVersion = prefs.getString(KEY_CURL_CFFI_VERSION, null)
         if (currentCurlVersion != BUNDLED_CURL_CFFI_VERSION) {
-            installed = installCurlCffi(context, sitePackages) || installed
-            if (installed) {
+            if (installCurlCffi(context, sitePackages)) {
+                installed = true
                 prefs.edit { putString(KEY_CURL_CFFI_VERSION, BUNDLED_CURL_CFFI_VERSION) }
             }
         } else {
-            // Verify the .so exists (in case user cleared data)
-            if (!File(sitePackages, "curl_cffi/_wrapper.abi3.so").exists()) {
-                installed = installCurlCffi(context, sitePackages) || installed
+            if (!File(sitePackages, "curl_cffi/_wrapper.abi3.so").isFile ||
+                !File(sitePackages, CFFI_BACKEND).isFile) {
+                installed = installCurlCffi(context, sitePackages)
             }
         }
 
         // Update yt-dlp binary
         val currentYtdlpVersion = prefs.getString(KEY_YTDLP_VERSION, null)
         if (currentYtdlpVersion != BUNDLED_YTDLP_VERSION) {
-            installed = updateYtdlp(context) || installed
-            if (installed) {
+            if (updateYtdlp(context)) {
+                installed = true
                 prefs.edit { putString(KEY_YTDLP_VERSION, BUNDLED_YTDLP_VERSION) }
             }
         }
 
+        if (installed) cachedCurlInstalled = null
         return installed
     }
 
-    /**
-     * Check if curl_cffi is installed and its native .so is loadable.
-     * Tests the actual import to verify the linker can resolve dependencies.
-     */
-    fun isCurlCffiImportable(context: Context): Boolean {
-        // Cache the result to avoid repeated import attempts
-        if (importTestResult != null) return importTestResult!!
+    /** Checks for the bundled native files; this does not load Python. */
+    fun isCurlCffiInstalled(context: Context): Boolean {
+        if (cachedCurlInstalled != null) return cachedCurlInstalled!!
 
         val pythonDir = File(context.noBackupFilesDir, "youtubedl-android/packages/python")
         val sitePackages = findSitePackages(pythonDir) ?: run {
-            importTestResult = false
+            cachedCurlInstalled = false
             return false
         }
 
-        // Check: does the _wrapper.abi3.so file exist and is there a _cffi_backend?
-        val hasWrapper = File(sitePackages, "curl_cffi/_wrapper.abi3.so").exists()
-        val hasCffiBackend = File(sitePackages, "_cffi_backend.cpython-312.so").exists()
-            || File(sitePackages, "_cffi_backend.cpython-313-aarch64-linux-android.so").exists()
-        importTestResult = hasWrapper && hasCffiBackend
+        val hasWrapper = File(sitePackages, "curl_cffi/_wrapper.abi3.so").isFile
+        val hasCffiBackend = File(sitePackages, CFFI_BACKEND).isFile
+        cachedCurlInstalled = hasWrapper && hasCffiBackend
 
-        Log.i(TAG, "curl_cffi importable: $importTestResult (wrapper=$hasWrapper, cffi_backend=$hasCffiBackend)")
-        return importTestResult!!
+        Log.i(TAG, "curl_cffi installed: $cachedCurlInstalled (wrapper=$hasWrapper, cffi_backend=$hasCffiBackend)")
+        return cachedCurlInstalled!!
     }
 
     /**
@@ -143,12 +139,14 @@ object PythonPackageManager {
     }
 
     private fun installCurlCffi(context: Context, sitePackages: File): Boolean {
+        // arm64-only wheel; on x86_64 (emulator/CI) extracting ~20MB can never load.
+        if (android.os.Build.SUPPORTED_ABIS.none { it == "arm64-v8a" }) return false
         return try {
             // Only install for arm64 (the only Android wheel available)
             val assetName = "python-packages/curl_cffi_arm64.zip"
             val destDir = File(sitePackages, "curl_cffi")
 
-            // Clean previous installation (may race with concurrent installs)
+            // Replace the previous package before extracting the bundled version.
             try { if (destDir.exists()) destDir.deleteRecursively() } catch (_: Throwable) { }
             try { if (File(sitePackages, "certifi").exists()) File(sitePackages, "certifi").deleteRecursively() } catch (_: Throwable) { }
 
@@ -179,13 +177,12 @@ object PythonPackageManager {
                 }
             }
 
-            // Verify the .so was extracted
             val soFile = File(destDir, "_wrapper.abi3.so")
-            if (soFile.exists()) {
+            if (soFile.isFile && File(sitePackages, CFFI_BACKEND).isFile) {
                 Log.i(TAG, "curl_cffi $BUNDLED_CURL_CFFI_VERSION installed (${soFile.length() / 1024}KB)")
                 true
             } else {
-                Log.e(TAG, "curl_cffi _wrapper.abi3.so not found after extraction")
+                Log.e(TAG, "curl_cffi wrapper or CFFI backend missing after extraction")
                 false
             }
         } catch (e: Exception) {
@@ -207,11 +204,6 @@ object PythonPackageManager {
             ytdlpFile.setExecutable(true, true)
             ytdlpFile.setReadable(true, true)
 
-            // Patch yt-dlp's curl_cffi version check to accept 0.15.x.
-            // yt-dlp 2026.03.17 only allows curl_cffi <= 0.14.x, but 0.15.0 is the
-            // first version with an official Android arm64 wheel. The API is compatible.
-            patchCurlCffiVersionCheck(ytdlpFile)
-
             Log.i(TAG, "yt-dlp updated to $BUNDLED_YTDLP_VERSION (${ytdlpFile.length() / 1024}KB)")
             true
         } catch (e: Exception) {
@@ -219,38 +211,4 @@ object PythonPackageManager {
             false
         }
     }
-
-    /**
-     * Patch the yt-dlp zipapp to accept curl_cffi 0.15.x.
-     * Replaces `< (0, 15)` with `< (0, 16)` in the _curlcffi.py module.
-     * The yt-dlp binary is a Python zipapp so we can do a byte-level replacement.
-     */
-    private fun patchCurlCffiVersionCheck(ytdlpFile: File) {
-        try {
-            val oldBytes = "< (0, 15)".toByteArray()
-            val newBytes = "< (0, 16)".toByteArray()
-            check(oldBytes.size == newBytes.size) { "Replacement must be same length" }
-
-            val bytes = ytdlpFile.readBytes()
-            val index = bytes.indexOfSequence(oldBytes)
-            if (index >= 0) {
-                System.arraycopy(newBytes, 0, bytes, index, newBytes.size)
-                ytdlpFile.writeBytes(bytes)
-                Log.i(TAG, "Patched yt-dlp curl_cffi version check: (0,15) -> (0,16)")
-            } else {
-                Log.d(TAG, "yt-dlp curl_cffi version check: pattern not found (already patched or different version)")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to patch yt-dlp curl_cffi version check", e)
-        }
-    }
-}
-
-/** Find a byte sequence within a ByteArray. */
-private fun ByteArray.indexOfSequence(target: ByteArray): Int {
-    if (target.isEmpty()) return 0
-    for (i in 0..(size - target.size)) {
-        if (this.sliceArray(i until i + target.size).contentEquals(target)) return i
-    }
-    return -1
 }

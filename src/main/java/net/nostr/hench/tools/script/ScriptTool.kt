@@ -5,9 +5,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import net.nostr.hench.cvm.ToolCallContext
 import net.nostr.hench.tools.ContentBlock
 import net.nostr.hench.tools.Tool
@@ -133,11 +135,14 @@ class ScriptTool(
                         return finish(ctx, ToolResult.errorJson("SCRIPT_ERROR", "script produced no output file"))
                     }
                     val uploaded = blossomUploader(outFile)
+                    val meta = buildJsonObject {
+                        put("url", uploaded.url)
+                        put("sha256", uploaded.sha256)
+                        put("sizeBytes", uploaded.sizeBytes)
+                    }
                     val ok = ToolResult(
                         content = listOf(
-                            ContentBlock.Text(
-                                """{"url":"${uploaded.url}","sha256":"${uploaded.sha256}","sizeBytes":${uploaded.sizeBytes}}""",
-                            ),
+                            ContentBlock.Text(JSON.encodeToString(JsonObject.serializer(), meta)),
                             ContentBlock.ResourceLink(
                                 uri = uploaded.url,
                                 name = uploaded.sha256.take(16),

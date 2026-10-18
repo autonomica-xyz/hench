@@ -1,0 +1,1995 @@
+curl-impersonate v2.2.3 (curl 8.22.0) + 20 security fixes from curl 8.23.0.
+Apply AFTER patches/curl.patch from curl-impersonate v2.2.3, at -p1.
+CVE-2026-107928 is GnuTLS-only and not applicable to this BoringSSL build.
+CVE-2026-86411 is already fixed in the 8.22.0 baseline.
+
+Upstream fix commits (curl/curl @curl-8_23_0, tests/ hunks stripped):
+CVE-2026-92392 (HIGH, HTTP/2 upload UAF) 8b0744af5b1b631da5b938ca31c3f9895ad5a321
+  - ported: 8.22.0 uses Curl_cpool_do_locked() not Curl_cpool_return();
+    ev_data_done moved inside if(conn) before pool handoff (same semantics).
+CVE-2026-107929 d37d79df1e01066417aff0a9e6bc675edad3edba
+  - ported: conn->localdev renamed conn->interface_opts (field added by
+    this same patch), host_input -> host_in in bindlocal.
+CVE-2026-86415 00271cfcb95b6481a1f91ce0a0dad5d64d2e89a9 (vtls_config: ported)
+CVE-2026-94266 7a6bd027d0de2b6857472d35da090ef60cc29f19
+CVE-2026-94265 557a52f21e37a626725a9e708c02af129c3ece1b
+CVE-2026-92386 445aa87e13f91c94bc742f54343a2eac924e1765
+CVE-2026-92387 753735af87f5c30cb6f60a70342f8bc4bc5fd5db
+CVE-2026-92388 ba8f8a7f27a5c5e19e4ef212b90b35a93559163e
+CVE-2026-92389 63dd390fab905a239a97e2700532929343ebc4e9
+CVE-2026-92390 c24a69d8cd368de4e25e3540bf0b7b000a31d5a7
+CVE-2026-92391 d7546809d5bd548b69ec49fca26565c8f6f0d344
+CVE-2026-86410 6ae9befb2fb6bdfdb5fc11  (first 22 chars; full sha in commit URL)
+CVE-2026-86412 6ded3e594455d6f018fab5f2f5d916eb9bc4ef94
+CVE-2026-86413 43029e2ec37eba2354ced199ccd8898de695858e
+CVE-2026-86414 2956af6c7451029fb12c12f8166dff211f930d52
+CVE-2026-87861 7c11f1a1bd53e2cd983fe153e45991302d097647
+CVE-2026-87862 a1614c3bcf1593eb524b37792124357d97a5429c
+CVE-2026-87863 08d50a791b3197a3d0a4fc2f778e243f5501c67e
+CVE-2026-87865 323c184b6bdf5b1988a10c0a61560666e1588149
+CVE-2026-87866 ed131747c1a3dc7f816d26724c44537ac8acba44
+
+The connection-pool port reacquires the bundle after callbacks can free it,
+preserving the lifetime correction from upstream follow-ups
+d1823ebc17e5778c30f8a6b2221a057ec607a9b7 and
+082503f1f623906eb00e57604b1c92ee8c69a2b5.
+diff -urN a/lib/cf-h1-proxy.c b/lib/cf-h1-proxy.c
+--- a/lib/cf-h1-proxy.c
++++ b/lib/cf-h1-proxy.c
+@@ -307,8 +307,7 @@
+   CURLcode result = CURLE_OK;
+   struct SingleRequest *k = &data->req;
+ 
+-  if((checkprefix("WWW-Authenticate:", header) && (401 == k->httpcode)) ||
+-     (checkprefix("Proxy-authenticate:", header) && (407 == k->httpcode))) {
++  if(checkprefix("Proxy-authenticate:", header) && (407 == k->httpcode)) {
+ 
+     bool proxy = (k->httpcode == 407);
+     char *auth = Curl_copy_header_value(header);
+@@ -394,8 +393,7 @@
+   struct SingleRequest *k = &data->req;
+   (void)cf;
+ 
+-  if((checkprefix("WWW-Authenticate:", header) && (401 == k->httpcode)) ||
+-     (checkprefix("Proxy-authenticate:", header) && (407 == k->httpcode))) {
++  if(checkprefix("Proxy-authenticate:", header) && (407 == k->httpcode)) {
+ 
+     bool proxy = (k->httpcode == 407);
+     char *auth = Curl_copy_header_value(header);
+diff -urN a/lib/cf-socket.c b/lib/cf-socket.c
+--- a/lib/cf-socket.c
++++ b/lib/cf-socket.c
+@@ -577,11 +577,13 @@
+  * len    [in]     - length of the input string.
+  * dev    [in/out] - address where a pointer to newly allocated memory
+  *                   holding the interface-or-host will be stored upon
+- *                   completion.
++ *                   completion or NULL if the caller is not interested.
+  * iface  [in/out] - address where a pointer to newly allocated memory
+- *                   holding the interface will be stored upon completion.
++ *                   holding the interface will be stored upon completion
++ *                   or NULL if the caller is not interested.
+  * host   [in/out] - address where a pointer to newly allocated memory
+- *                   holding the host will be stored upon completion.
++ *                   holding the host will be stored upon completion
++ *                   or NULL if the caller is not interested.
+  *
+  * Returns CURLE_OK on success.
+  */
+@@ -593,27 +595,36 @@
+   static const char if_host_prefix[] = "ifhost!";
+   size_t len;
+ 
+-  DEBUGASSERT(dev);
+-  DEBUGASSERT(iface);
+-  DEBUGASSERT(host);
+-
+   len = strlen(input);
+   if(len > 512)
+     return CURLE_BAD_FUNCTION_ARGUMENT;
+ 
++  if(dev)
++    *dev = NULL;
++  if(iface)
++    *iface = NULL;
++  if(host)
++    *host = NULL;
++
+   if(!strncmp(if_prefix, input, strlen(if_prefix))) {
+     input += strlen(if_prefix);
+     if(!*input)
+       return CURLE_BAD_FUNCTION_ARGUMENT;
+-    *iface = curlx_memdup0(input, len - strlen(if_prefix));
+-    return *iface ? CURLE_OK : CURLE_OUT_OF_MEMORY;
++    if(iface) {
++      *iface = curlx_memdup0(input, len - strlen(if_prefix));
++      return *iface ? CURLE_OK : CURLE_OUT_OF_MEMORY;
++    }
++    return CURLE_OK;
+   }
+   else if(!strncmp(host_prefix, input, strlen(host_prefix))) {
+     input += strlen(host_prefix);
+     if(!*input)
+       return CURLE_BAD_FUNCTION_ARGUMENT;
+-    *host = curlx_memdup0(input, len - strlen(host_prefix));
+-    return *host ? CURLE_OK : CURLE_OUT_OF_MEMORY;
++    if(host) {
++      *host = curlx_memdup0(input, len - strlen(host_prefix));
++      return *host ? CURLE_OK : CURLE_OUT_OF_MEMORY;
++    }
++    return CURLE_OK;
+   }
+   else if(!strncmp(if_host_prefix, input, strlen(if_host_prefix))) {
+     const char *host_part;
+@@ -622,22 +633,30 @@
+     host_part = memchr(input, '!', len);
+     if(!host_part || !*(host_part + 1))
+       return CURLE_BAD_FUNCTION_ARGUMENT;
+-    *iface = curlx_memdup0(input, host_part - input);
+-    if(!*iface)
+-      return CURLE_OUT_OF_MEMORY;
++    if(iface) {
++      *iface = curlx_memdup0(input, host_part - input);
++      if(!*iface)
++        return CURLE_OUT_OF_MEMORY;
++    }
+     ++host_part;
+-    *host = curlx_memdup0(host_part, len - (host_part - input));
+-    if(!*host) {
+-      curlx_safefree(*iface);
+-      return CURLE_OUT_OF_MEMORY;
++    if(host) {
++      *host = curlx_memdup0(host_part, len - (host_part - input));
++      if(!*host) {
++        if(iface)
++          curlx_safefree(*iface);
++        return CURLE_OUT_OF_MEMORY;
++      }
+     }
+     return CURLE_OK;
+   }
+ 
+   if(!*input)
+     return CURLE_BAD_FUNCTION_ARGUMENT;
+-  *dev = curlx_memdup0(input, len);
+-  return *dev ? CURLE_OK : CURLE_OUT_OF_MEMORY;
++  if(dev) {
++    *dev = curlx_memdup0(input, len);
++    return *dev ? CURLE_OK : CURLE_OUT_OF_MEMORY;
++  }
++  return CURLE_OK;
+ }
+ 
+ #ifndef CURL_DISABLE_BINDLOCAL
+@@ -652,34 +671,42 @@
+ #ifdef USE_IPV6
+   struct sockaddr_in6 *si6 = (struct sockaddr_in6 *)&sa;
+ #endif
+-
+   struct Curl_dns_entry *h = NULL;
+   unsigned short port = data->set.localport; /* use this port number, 0 for
+                                                 "random" */
+   /* how many port numbers to try to bind to, increasing one at a time */
+   int portnum = data->set.localportrange;
+-  const char *dev = CURL_EASY_STR(data, STRING_DEVICE);
+-  const char *iface_input = CURL_EASY_STR(data, STRING_INTERFACE);
+-  const char *host_input = CURL_EASY_STR(data, STRING_BINDHOST);
+-  const char *iface = iface_input ? iface_input : dev;
+-  const char *host = host_input ? host_input : dev;
++  char *dev_in = NULL, *iface_in = NULL, *host_in = NULL;
++  const char *iface = NULL, *host = NULL;
+   int sockerr;
+ #ifdef IP_BIND_ADDRESS_NO_PORT
+   int on = 1;
+ #endif
++  CURLcode result = CURLE_OK;
++
+ #ifndef USE_IPV6
+   (void)scope;
+ #endif
++  if(conn->interface_opts) {
++    /*************************************************************
++     * Select device to bind socket to
++     *************************************************************/
++    result = Curl_parse_interface(conn->interface_opts,
++                                  &dev_in, &iface_in, &host_in);
++    if(result)
++      goto out;
++    /* This is how we use the values */
++    iface = iface_in ? iface_in : dev_in;
++    host = host_in ? host_in : dev_in;
++  }
+ 
+-  /*************************************************************
+-   * Select device to bind socket to
+-   *************************************************************/
+   if(!iface && !host && !port)
+-    /* no local kind of binding was requested */
+-    return CURLE_OK;
+-  else if(iface && (strlen(iface) >= 255))
+-    return CURLE_BAD_FUNCTION_ARGUMENT;
++    goto out;
+ 
++  if(iface && (strlen(iface) >= 255)) {
++    result = CURLE_BAD_FUNCTION_ARGUMENT;
++    goto out;
++  }
+   memset(&sa, 0, sizeof(struct Curl_sockaddr_storage));
+ 
+   if(iface || host) {
+@@ -706,14 +733,15 @@
+          * succeeds it means the parameter was a valid interface and not an IP
+          * address. Return immediately.
+          */
+-        if(!host_input) {
++        if(!host_in) {
+           infof(data, "socket successfully bound to interface '%s'", iface);
+-          return CURLE_OK;
++          result = CURLE_OK;
++          goto out;
+         }
+       }
+     }
+ #endif
+-    if(!host_input) {
++    if(!host_in) {
+       /* Discover IP from input device, then bind to it */
+       if2ip_result = Curl_if2ip(af,
+ #ifdef USE_IPV6
+@@ -723,18 +751,20 @@
+     }
+     switch(if2ip_result) {
+     case IF2IP_NOT_FOUND:
+-      if(iface_input && !host_input) {
++      if(iface_in && !host_in) {
+         /* Do not fall back to treating it as a hostname */
+         char buffer[STRERROR_LEN];
+         data->state.os_errno = sockerr = SOCKERRNO;
+         failf(data, "Could not bind to interface '%s' with errno %d: %s",
+               iface, sockerr, curlx_strerror(sockerr, buffer, sizeof(buffer)));
+-        return CURLE_INTERFACE_FAILED;
++        result = CURLE_INTERFACE_FAILED;
++        goto out;
+       }
+       break;
+     case IF2IP_AF_NOT_SUPPORTED:
+       /* Signal the caller to try another address family if available */
+-      return CURLE_UNSUPPORTED_PROTOCOL;
++      result = CURLE_UNSUPPORTED_PROTOCOL;
++      goto out;
+     case IF2IP_FOUND:
+       /*
+        * We now have the numerical IP address in the 'myhost' buffer
+@@ -745,7 +775,7 @@
+       done = 1;
+       break;
+     }
+-    if(!iface_input || host_input) {
++    if(!iface_in || host_in) {
+       /*
+        * This was not an interface, resolve the name as a hostname
+        * or IP number
+@@ -772,7 +802,8 @@
+         if(af != h_af) {
+           /* bad IP version combo, signal the caller to try another address
+              family if available */
+-          return CURLE_UNSUPPORTED_PROTOCOL;
++          result = CURLE_UNSUPPORTED_PROTOCOL;
++          goto out;
+         }
+         done = 1;
+       }
+@@ -805,8 +836,10 @@
+                if present, known to be numeric */
+             curl_off_t scope_id;
+             if(curlx_str_number((const char **)CURL_UNCONST(&scope_ptr),
+-                                &scope_id, UINT_MAX))
+-              return CURLE_UNSUPPORTED_PROTOCOL;
++                                &scope_id, UINT_MAX)) {
++              result = CURLE_UNSUPPORTED_PROTOCOL;
++              goto out;
++            }
+             si6->sin6_scope_id = (unsigned int)scope_id;
+           }
+ #endif
+@@ -833,7 +866,8 @@
+       data->state.os_errno = sockerr = SOCKERRNO;
+       failf(data, "Could not bind to '%s' with errno %d: %s", host,
+             sockerr, curlx_strerror(sockerr, buffer, sizeof(buffer)));
+-      return CURLE_INTERFACE_FAILED;
++      result = CURLE_INTERFACE_FAILED;
++      goto out;
+     }
+   }
+   else {
+@@ -860,7 +894,8 @@
+       /* we succeeded to bind */
+       infof(data, "Local port: %hu", port);
+       conn->bits.bound = TRUE;
+-      return CURLE_OK;
++      result = CURLE_OK;
++      goto out;
+     }
+ 
+     if(--portnum > 0) {
+@@ -886,7 +921,13 @@
+           sockerr, curlx_strerror(sockerr, buffer, sizeof(buffer)));
+   }
+ 
+-  return CURLE_INTERFACE_FAILED;
++  result = CURLE_INTERFACE_FAILED;
++
++out:
++  curlx_free(dev_in);
++  curlx_free(iface_in);
++  curlx_free(host_in);
++  return result;
+ }
+ #endif
+ 
+diff -urN a/lib/conncache.c b/lib/conncache.c
+--- a/lib/conncache.c
++++ b/lib/conncache.c
+@@ -697,6 +697,8 @@
+ {
+   struct cpool *cpool = cpool_get_instance(data);
+   struct cpool_bundle *bundle;
++  struct Curl_llist_node *curr;
++  struct connectdata *conn;
+   bool found = FALSE;
+ 
+   DEBUGASSERT(cpool);
+@@ -709,15 +711,38 @@
+                           CURL_UNCONST(destination),
+                           strlen(destination) + 1);
+   if(bundle) {
+-    struct Curl_llist_node *curr = Curl_llist_head(&bundle->conns);
+-    while(curr) {
+-      struct connectdata *conn = Curl_node_elem(curr);
+-      /* Get next node now. callback might discard current */
+-      curr = Curl_node_next(curr);
++    if(data->state.lastconnect_id >= 0) {
++      /* Try to find the previously used connection in this bundle
++       * and if it still matches, use that one. This assures that
++       * an authentication involving several requests is using
++       * the same connection again. */
++      curr = Curl_llist_head(&bundle->conns);
++      while(curr) {
++        conn = Curl_node_elem(curr);
++        curr = Curl_node_next(curr);
++        if(data->state.lastconnect_id == conn->connection_id) {
++          if(conn_cb(conn, userdata))
++            found = TRUE;
++          break;
++        }
++      }
++    }
+ 
+-      if(conn_cb(conn, userdata)) {
+-        found = TRUE;
+-        break;
++    if(!found) {
++      bundle = Curl_hash_pick(&cpool->dest2bundle,
++                              CURL_UNCONST(destination),
++                              strlen(destination) + 1);
++      curr = bundle ? Curl_llist_head(&bundle->conns) : NULL;
++      while(curr) {
++        conn = Curl_node_elem(curr);
++        curr = Curl_node_next(curr);
++        /* Already tried a matching connection above. No need to
++         * invoke callback again for this one. */
++        if((data->state.lastconnect_id != conn->connection_id) &&
++           conn_cb(conn, userdata)) {
++          found = TRUE;
++          break;
++        }
+       }
+     }
+   }
+diff -urN a/lib/cookie.c b/lib/cookie.c
+--- a/lib/cookie.c
++++ b/lib/cookie.c
+@@ -1190,7 +1190,9 @@
+   if(fp) {
+     struct dynbuf buf;
+     bool eof = FALSE;
+-    curlx_dyn_init(&buf, MAX_COOKIE_LINE);
++    /* accept a little longer lines so that a full cookie fits and does not
++       abort the file read */
++    curlx_dyn_init(&buf, MAX_COOKIE_LINE + 48);
+     do {
+       result = Curl_get_line(&buf, fp, &eof);
+       if(!result) {
+@@ -1207,8 +1209,9 @@
+                                  (headerline ? COOKIE_HTTPHEADER : 0) |
+                                  COOKIE_NOEXPIRE | COOKIE_SECURE |
+                                  (flags & COOKIE_NOPSL));
+-        /* File reading cookie failures are not propagated back to the
+-           caller because there is no way to do that */
++        /* Ignore individual cookie problems unless we ran out of memory */
++        if(result != CURLE_OUT_OF_MEMORY)
++          result = CURLE_OK;
+       }
+     } while(!result && !eof);
+     curlx_dyn_free(&buf); /* free the line buffer */
+diff -urN a/lib/cw-out.c b/lib/cw-out.c
+--- a/lib/cw-out.c
++++ b/lib/cw-out.c
+@@ -147,8 +147,14 @@
+   switch(otype) {
+   case CW_OUT_BODY:
+   case CW_OUT_BODY_0LEN:
+-    *pwcb = data->set.fwrite_func;
+-    *pwcb_data = data->set.out;
++    if(Curl_ftp_listmode(data)) {
++      *pwcb = Curl_ftp_parselist;
++      *pwcb_data = data;
++    }
++    else {
++      *pwcb = data->set.fwrite_func;
++      *pwcb_data = data->set.out;
++    }
+     *pmax_write = CURL_MAX_WRITE_SIZE;
+     /* if we ever want buffering of BODY output, we can set `min_write`
+      * the preferred size. The default should always be to pass data
+diff -urN a/lib/ftp-int.h b/lib/ftp-int.h
+--- a/lib/ftp-int.h
++++ b/lib/ftp-int.h
+@@ -79,11 +79,6 @@
+ 
+ struct ftp_wc {
+   struct ftp_parselist_data *parser;
+-
+-  struct {
+-    curl_write_callback write_function;
+-    FILE *file_descriptor;
+-  } backup;
+ };
+ 
+ /* This FTP struct is used in the Curl_easy. All FTP data that is
+diff -urN a/lib/ftp.c b/lib/ftp.c
+--- a/lib/ftp.c
++++ b/lib/ftp.c
+@@ -4017,15 +4017,6 @@
+     goto fail;
+   }
+ 
+-  /* backup old write_function */
+-  ftpwc->backup.write_function = data->set.fwrite_func;
+-  /* parsing write function */
+-  data->set.fwrite_func = Curl_ftp_parselist;
+-  /* backup old file descriptor */
+-  ftpwc->backup.file_descriptor = data->set.out;
+-  /* let the writefunc callback know the transfer */
+-  data->set.out = data;
+-
+   infof(data, "Wildcard - Parsing started");
+   return CURLE_OK;
+ 
+@@ -4061,10 +4052,6 @@
+       /* In this state is LIST response successfully parsed, so lets restore
+          previous WRITEFUNCTION callback and WRITEDATA pointer */
+       struct ftp_wc *ftpwc = wildcard->ftpwc;
+-      data->set.fwrite_func = ftpwc->backup.write_function;
+-      data->set.out = ftpwc->backup.file_descriptor;
+-      ftpwc->backup.write_function = ZERO_NULL;
+-      ftpwc->backup.file_descriptor = NULL;
+       wildcard->state = CURLWC_DOWNLOADING;
+ 
+       if(Curl_ftp_parselist_geterror(ftpwc->parser)) {
+diff -urN a/lib/ftplistparser.c b/lib/ftplistparser.c
+--- a/lib/ftplistparser.c
++++ b/lib/ftplistparser.c
+@@ -1012,6 +1012,16 @@
+   return CURLE_OK;
+ }
+ 
++/* returns TRUE if in wildcard listing mode */
++bool Curl_ftp_listmode(struct Curl_easy *data)
++{
++  if(data->state.wildcardmatch) {
++    struct WildcardData * const wildcard = data->wildcard;
++    return wildcard && (wildcard->state <= CURLWC_MATCHING);
++  }
++  return FALSE;
++}
++
+ size_t Curl_ftp_parselist(char *buffer, size_t size, size_t nmemb,
+                           void *connptr)
+ {
+diff -urN a/lib/ftplistparser.h b/lib/ftplistparser.h
+--- a/lib/ftplistparser.h
++++ b/lib/ftplistparser.h
+@@ -27,6 +27,9 @@
+ 
+ #ifndef CURL_DISABLE_FTP
+ 
++/* returns TRUE if in wildcard listing mode */
++bool Curl_ftp_listmode(struct Curl_easy *data);
++
+ /* WRITEFUNCTION callback for parsing LIST responses */
+ size_t Curl_ftp_parselist(char *buffer, size_t size, size_t nmemb,
+                           void *connptr);
+@@ -71,6 +74,8 @@
+ struct Curl_easy;
+ 
+ #else /* CURL_DISABLE_FTP */
++#define Curl_ftp_listmode(x) FALSE
++#define Curl_ftp_parselist ZERO_NULL
+ #define Curl_wildcard_dtor(x)
+ #endif /* !CURL_DISABLE_FTP */
+ 
+diff -urN a/lib/getinfo.c b/lib/getinfo.c
+--- a/lib/getinfo.c
++++ b/lib/getinfo.c
+@@ -94,6 +94,7 @@
+ 
+   curlx_safefree(info->contenttype);
+   curlx_safefree(info->wouldredirect);
++  curlx_safefree(info->effective_url);
+   curl_slist_free_all(info->cookiechanges);
+   info->cookiechanges = NULL;
+   info->cookiechanges_tail = NULL;
+@@ -111,15 +112,51 @@
+ #endif
+ }
+ 
++static CURLcode effective_url(struct Curl_easy *data,
++                              const char **param_charp)
++{
++  const char *s = Curl_bufref_ptr(&data->state.url);
++  *param_charp = s ? s : "";
++  if(s) {
++    char *url = NULL;
++    /* Make a copy of the URL without credentials */
++    CURLU *u = curl_url();
++    CURLUcode uc;
++    if(!u)
++      return CURLE_OUT_OF_MEMORY;
++
++    uc = curl_url_set(u, CURLUPART_URL, s,
++                      CURLU_NON_SUPPORT_SCHEME |
++                      (data->set.path_as_is ? CURLU_PATH_AS_IS : 0));
++    if(!uc)
++      uc = curl_url_set(u, CURLUPART_USER, NULL, 0);
++    if(!uc)
++      uc = curl_url_set(u, CURLUPART_PASSWORD, NULL, 0);
++    if(!uc)
++      uc = curl_url_get(u, CURLUPART_URL, &url, CURLU_GET_EMPTY);
++
++    curl_url_cleanup(u);
++
++    if(uc || !url)
++      return CURLE_OUT_OF_MEMORY;
++    if(strcmp(url, s)) {
++      /* they are different */
++      curlx_free(data->info.effective_url);
++      data->info.effective_url = url;
++      *param_charp = url;
++    }
++    else
++      curl_free(url);
++  }
++  return CURLE_OK;
++}
++
+ static CURLcode getinfo_char(struct Curl_easy *data, CURLINFO info,
+                              const char **param_charp)
+ {
+   switch(info) {
+-  case CURLINFO_EFFECTIVE_URL: {
+-    const char *s = Curl_bufref_ptr(&data->state.url);
+-    *param_charp = s ? s : "";
+-  }
+-    break;
++  case CURLINFO_EFFECTIVE_URL:
++    return effective_url(data, param_charp);
+   case CURLINFO_EFFECTIVE_METHOD: {
+     const char *m = CURL_EASY_STR(data, STRING_CUSTOMREQUEST);
+     if(!m) {
+diff -urN a/lib/hsts.c b/lib/hsts.c
+--- a/lib/hsts.c
++++ b/lib/hsts.c
+@@ -43,6 +43,8 @@
+ #define MAX_HSTS_DATELEN 17
+ #define UNLIMITED        "unlimited"
+ 
++#define CAP_HSTS_MAX_AGE (2*365*24*3600) /* two years cap */
++
+ #if defined(DEBUGBUILD) || defined(UNITTESTS)
+ /* to play well with debug builds, we can *set* a fixed time this will
+    return */
+@@ -257,9 +259,9 @@
+       const char *vp = curlx_str(&val);
+       if(gotma)
+         return CURLE_BAD_FUNCTION_ARGUMENT;
+-      rc = curlx_str_number(&vp, &expires, TIME_T_MAX);
++      rc = curlx_str_number(&vp, &expires, CAP_HSTS_MAX_AGE);
+       if(rc == STRE_OVERFLOW)
+-        expires = CURL_OFF_T_MAX;
++        expires = CAP_HSTS_MAX_AGE;
+       else if(rc)
+         /* invalid max-age */
+         return CURLE_BAD_FUNCTION_ARGUMENT;
+@@ -344,22 +346,21 @@
+ /*
+  * Write this single hsts entry to a single output line
+  */
+-static CURLcode hsts_out(struct stsentry *sts, FILE *fp)
++static void hsts_out(struct stsentry *sts, FILE *fp)
+ {
+   struct tm stamp;
+   if(sts->expires != TIME_T_MAX) {
+     CURLcode result = curlx_gmtime((time_t)sts->expires, &stamp);
+-    if(result)
+-      return result;
+-    curl_mfprintf(fp, "%s%s \"%d%02d%02d %02d:%02d:%02d\"\n",
+-                  sts->includeSubDomains ? "." : "", sts->host,
+-                  stamp.tm_year + 1900, stamp.tm_mon + 1, stamp.tm_mday,
+-                  stamp.tm_hour, stamp.tm_min, stamp.tm_sec);
++    if(!result)
++      /* skip the entry if the date function fails */
++      curl_mfprintf(fp, "%s%s \"%d%02d%02d %02d:%02d:%02d\"\n",
++                    sts->includeSubDomains ? "." : "", sts->host,
++                    stamp.tm_year + 1900, stamp.tm_mon + 1, stamp.tm_mday,
++                    stamp.tm_hour, stamp.tm_min, stamp.tm_sec);
+   }
+   else
+     curl_mfprintf(fp, "%s%s \"%s\"\n",
+                   sts->includeSubDomains ? "." : "", sts->host, UNLIMITED);
+-  return CURLE_OK;
+ }
+ 
+ /*
+@@ -394,9 +395,7 @@
+     for(e = Curl_llist_head(&h->list); e; e = n) {
+       struct stsentry *sts = Curl_node_elem(e);
+       n = Curl_node_next(e);
+-      result = hsts_out(sts, out);
+-      if(result)
+-        break;
++      hsts_out(sts, out);
+     }
+     curlx_fclose(out);
+     if(!result && tempstore && curlx_rename(tempstore, file))
+@@ -463,7 +462,7 @@
+ 
+   if(hostlen) {
+     /* only add it if not already present */
+-    e = hsts_check(h, host, hostlen, subdomain);
++    e = hsts_check(h, host, hostlen, FALSE);
+     if(!e)
+       result = hsts_create(h, host, hostlen, subdomain, expires);
+     /* 'host' is not necessarily null-terminated */
+diff -urN a/lib/http.c b/lib/http.c
+--- a/lib/http.c
++++ b/lib/http.c
+@@ -694,7 +694,8 @@
+       (proxy && !Curl_checkProxyheaders(data, conn,
+                                         STRCONST("Proxy-authorization"))) ||
+ #endif
+-      (!proxy && !Curl_checkheaders(data, STRCONST("Authorization")))) {
++      (!proxy && !Curl_checkheaders(data, STRCONST("Authorization")) &&
++       Curl_auth_allowed_to_host(data))) {
+       auth = "Negotiate";
+       result = Curl_output_negotiate(data, conn, proxy);
+       if(result)
+@@ -707,10 +708,14 @@
+ #endif
+ #ifdef USE_NTLM
+   if(authstatus->picked == CURLAUTH_NTLM) {
+-    auth = "NTLM";
+-    result = Curl_output_ntlm(data, proxy);
+-    if(result)
+-      return result;
++    if(proxy || Curl_auth_allowed_to_host(data)) {
++      auth = "NTLM";
++      result = Curl_output_ntlm(data, proxy);
++      if(result)
++        return result;
++    }
++    else
++      authstatus->done = TRUE;
+   }
+   else
+ #endif
+diff -urN a/lib/http_proxy.c b/lib/http_proxy.c
+--- a/lib/http_proxy.c
++++ b/lib/http_proxy.c
+@@ -489,10 +489,7 @@
+       infof(data, "  %s: %s", entry->name, entry->value);
+   }
+ 
+-  if(resp->status == 401) {
+-    auth_reply = Curl_dynhds_cget(&resp->headers, "WWW-Authenticate");
+-  }
+-  else if(resp->status == 407) {
++  if(resp->status == 407) {
+     auth_reply = Curl_dynhds_cget(&resp->headers, "Proxy-Authenticate");
+   }
+ 
+diff -urN a/lib/mime.c b/lib/mime.c
+--- a/lib/mime.c
++++ b/lib/mime.c
+@@ -1165,20 +1165,36 @@
+   }
+ }
+ 
+-/* Recursively delete a mime handle and its parts. */
++/* Non-recursively delete a mime handle and its parts. */
+ void curl_mime_free(curl_mime *mime)
+ {
+   curl_mimepart *part;
+ 
+-  if(mime) {
+-    mime_subparts_unbind(mime);  /* Be sure it is not referenced anymore. */
+-    while(mime->firstpart) {
+-      part = mime->firstpart;
++  if(!mime)
++    return;
++
++  mime_subparts_unbind(mime);  /* Be sure it is not referenced anymore. */
++
++  while(mime) {
++    part = mime->firstpart;
++    if(part) {
+       mime->firstpart = part->nextpart;
++      if(part->kind == MIMEKIND_MULTIPART && part->arg &&
++         part->freefunc == mime_subparts_free) {
++        curl_mime *subparts = (curl_mime *)part->arg;
++        part->freefunc = NULL;
++        cleanup_part_content(part);
++        subparts->parent = mime->parent;
++        mime->parent = (curl_mimepart *)subparts;
++      }
+       Curl_mime_cleanpart(part);
+       curlx_free(part);
+     }
+-    curlx_free(mime);
++    else {
++      curl_mime *parent = (curl_mime *)mime->parent;
++      curlx_free(mime);
++      mime = parent;
++    }
+   }
+ }
+ 
+diff -urN a/lib/multi.c b/lib/multi.c
+--- a/lib/multi.c
++++ b/lib/multi.c
+@@ -738,12 +738,6 @@
+   /* Make sure that transfer client writes are really done now. */
+   result = Curl_1st_fatal(result, Curl_xfer_write_done(data, premature));
+ 
+-  /* Inform connection filters that this transfer is done */
+-  if(conn)
+-    Curl_conn_ev_data_done(data, premature);
+-
+-  multi_schedule_pending(data->multi); /* connection / multiplex */
+-
+   if(!result)
+     result = Curl_req_done(&data->req, data, premature);
+ 
+@@ -752,9 +746,16 @@
+      * do with the transfer's connection. */
+     struct multi_done_ctx mdctx;
+ 
++    /* Inform connection filters that this transfer is done and they
++     * need to give up any references to `data`. */
++    Curl_conn_ev_data_done(data, premature);
++
+     memset(&mdctx, 0, sizeof(mdctx));
+     mdctx.premature = premature;
+     Curl_cpool_do_locked(data, data->conn, multi_done_locked, &mdctx);
++
++    if(data->multi)
++      multi_schedule_pending(data->multi);
+   }
+ 
+   /* flush the netrc cache */
+diff -urN a/lib/pingpong.c b/lib/pingpong.c
+--- a/lib/pingpong.c
++++ b/lib/pingpong.c
+@@ -245,6 +245,7 @@
+   CURLcode result = CURLE_OK;
+   size_t gotbytes;
+   char buffer[900];
++  int maxloops = 10;
+ 
+   *code = 0; /* 0 for errors or not done */
+   *size = 0;
+@@ -262,6 +263,9 @@
+       pp->nfinal = 0; /* now gone */
+     }
+     if(!pp->overflow) {
++      if(!maxloops--) /* don't get stuck */
++        return CURLE_OK;
++
+       result = pingpong_read(data, sockindex, buffer, sizeof(buffer),
+                              &gotbytes);
+       if(result == CURLE_AGAIN)
+diff -urN a/lib/setopt.c b/lib/setopt.c
+--- a/lib/setopt.c
++++ b/lib/setopt.c
+@@ -245,32 +245,18 @@
+ 
+ static CURLcode setstropt_interface(struct Curl_easy *data, char *option)
+ {
+-  char *dev = NULL;
+-  char *iface = NULL;
+-  char *host = NULL;
+-  CURLcode result;
+-
++  if(option && !option[0])
++    option = NULL;
+   if(option) {
+-    /* Parse the interface details if set, otherwise clear them all */
+-    result = Curl_parse_interface(option, &dev, &iface, &host);
++    /* Parse for checking syntax */
++    CURLcode result = Curl_parse_interface(option, NULL, NULL, NULL);
+     if(result)
+       return result;
++    return CURL_EASY_STR_SET(data, STRING_INTERFACE_OPT,
++                             option, strlen(option));
+   }
+-
+-  result = CURL_EASY_STR_SETN(data, STRING_DEVICE, dev);
+-  dev = NULL;
+-  if(!result) {
+-    result = CURL_EASY_STR_SETN(data, STRING_INTERFACE, iface);
+-    iface = NULL;
+-  }
+-  if(!result) {
+-    result = CURL_EASY_STR_SETN(data, STRING_BINDHOST, host);
+-    host = NULL;
+-  }
+-  curlx_free(dev);
+-  curlx_free(iface);
+-  curlx_free(host);
+-  return result;
++  CURL_EASY_STR_CLEAR(data, STRING_INTERFACE_OPT);
++  return CURLE_OK;
+ }
+ 
+ #ifdef USE_SSL
+diff -urN a/lib/tftp.c b/lib/tftp.c
+--- a/lib/tftp.c
++++ b/lib/tftp.c
+@@ -366,6 +366,9 @@
+   char *bufptr;
+   bool eos;
+ 
++  if(!data->state.upload)
++    return CURLE_TFTP_ILLEGAL;
++
+   switch(event) {
+ 
+   case TFTP_EVENT_ACK:
+@@ -773,10 +776,14 @@
+     break;
+ 
+   case TFTP_EVENT_ACK: /* Connected for transmit */
++    if(!data->state.upload)
++      return CURLE_TFTP_ILLEGAL;
+     result = tftp_connect_for_tx(state, event);
+     break;
+ 
+   case TFTP_EVENT_DATA: /* Connected for receive */
++    if(data->state.upload)
++      return CURLE_TFTP_ILLEGAL;
+     result = tftp_connect_for_rx(state, event);
+     break;
+ 
+@@ -1077,6 +1084,8 @@
+ 
+     switch(state->event) {
+     case TFTP_EVENT_DATA:
++      if(data->state.upload)
++        return CURLE_TFTP_ILLEGAL;
+       /* Do not pass to the client empty or retransmitted packets */
+       if(state->rbytes > 4 &&
+          (NEXT_BLOCKNUM(state->block) == getrpacketblock(&state->rpacket))) {
+diff -urN a/lib/transfer.c b/lib/transfer.c
+--- a/lib/transfer.c
++++ b/lib/transfer.c
+@@ -523,6 +523,7 @@
+   data->state.authhost.want = data->set.httpauth;
+   data->state.authproxy.want = data->set.proxyauth;
+   curlx_safefree(data->info.wouldredirect);
++  curlx_safefree(data->info.effective_url);
+   Curl_data_priority_clear_state(data);
+   if(data->set.http_auto_referer)
+     Curl_bufref_free(&data->state.referer);
+diff -urN a/lib/url.c b/lib/url.c
+--- a/lib/url.c
++++ b/lib/url.c
+@@ -527,7 +527,7 @@
+   Curl_creds_unlink(&conn->creds);
+   Curl_peer_unlink(&conn->creds_origin);
+   curlx_safefree(conn->options);
+-  curlx_safefree(conn->localdev);
++  curlx_safefree(conn->interface_opts);
+   Curl_ssl_conn_config_cleanup(conn);
+ 
+   curlx_safefree(conn->destination);
+@@ -608,7 +608,6 @@
+   BIT(require_tls); /* Requires TLS use from a clear-text start, can only
+                  * reuse connections that have TLS. */
+   BIT(wait_pipe);
+-  BIT(force_reuse);
+   BIT(seen_pending_conn);
+   BIT(seen_single_use_conn);
+   BIT(seen_multiplex_conn);
+@@ -626,23 +625,29 @@
+      m->data->set.ipver != conn->ip_version)
+     return FALSE;
+ 
+-  if(m->needle->localdev || m->needle->localport) {
++  /* When needle has specific local bind settings, those have to match.
++   * If it does not, any other connection might do when it comes to ports. */
++  if(m->needle->localport &&
++     ((conn->localport != m->needle->localport) ||
++      (conn->localportrange != m->needle->localportrange)))
++    return FALSE;
++  /* For interface related bind options, we require a full match
++   * as connection might go totally different ways (VPNs, for example). */
++  if((m->needle->interface_opts != conn->interface_opts) &&
++     (!m->needle->interface_opts || !conn->interface_opts ||
++      strcmp(conn->interface_opts, m->needle->interface_opts)))
++    return FALSE;
++
++  if((m->needle->interface_opts || m->needle->localport) &&
+     /* If we are bound to a specific local end (IP+port), we must not reuse a
+        random other one, although if we did not ask for a particular one we
+-       can reuse one that was bound.
+-
+-       This comparison is a bit rough and too strict. Since the input
+-       parameters can be specified in numerous ways and still end up the same
+-       it would take a lot of processing to make it really accurate. Instead,
+-       this matching will assume that reuses of bound connections will most
+-       likely also reuse the exact same binding parameters and missing out a
+-       few edge cases should not hurt anyone much. */
+-    if((conn->localport != m->needle->localport) ||
+-       (conn->localportrange != m->needle->localportrange) ||
+-       (m->needle->localdev &&
+-        (!conn->localdev || strcmp(conn->localdev, m->needle->localdev))))
+-      return FALSE;
+-  }
++       can reuse one that was bound. */
++    ((conn->localport != m->needle->localport) ||
++     (conn->localportrange != m->needle->localportrange) ||
++     (m->needle->interface_opts &&
++      (!conn->interface_opts ||
++       strcmp(conn->interface_opts, m->needle->interface_opts)))))
++    return FALSE;
+ 
+   if(!m->needle->via_peer != !conn->via_peer)
+     /* do not mix connections that use the "connect to host" feature and
+@@ -782,7 +791,8 @@
+ 
+ #ifndef CURL_DISABLE_HTTP
+ static bool url_match_http_multiplex(struct connectdata *conn,
+-                                     struct url_conn_match *m)
++                                     struct url_conn_match *m,
++                                     bool *pwait_pipe)
+ {
+   if(m->may_multiplex &&
+      (m->data->state.http_neg.allowed & (CURL_HTTP_V2x | CURL_HTTP_V3x)) &&
+@@ -791,7 +801,7 @@
+     if(m->data->set.pipewait) {
+       infof(m->data, "Server upgrade does not support multiplex yet, wait");
+       m->found = NULL;
+-      m->wait_pipe = TRUE;
++      *pwait_pipe = TRUE;
+       return TRUE; /* stop searching, we want to wait */
+     }
+     infof(m->data, "Server upgrade cannot be used");
+@@ -833,8 +843,8 @@
+   return TRUE;
+ }
+ #else
+-#define url_match_http_multiplex(c, m) ((void)(c), (void)(m), TRUE)
+-#define url_match_http_version(c, m)   ((void)(c), (void)(m), TRUE)
++#define url_match_http_multiplex(c, m, w) ((void)(c), (void)(m), TRUE)
++#define url_match_http_version(c, m)      ((void)(c), (void)(m), TRUE)
+ #endif
+ 
+ static bool url_match_proto_config(struct connectdata *conn,
+@@ -926,8 +936,9 @@
+   }
+   else if(m->want_ntlm_http) {
+     /* Transfer wants NTLM, connection is not using it.
+-     * Do not reuse when connection has credentials and they differ. */
+-    if(conn->creds &&
++     * Do not reuse when connection credentials state is bound to an origin
++     * and it or creds differ. */
++    if(conn->creds_origin &&
+        (!Curl_creds_same(conn->creds, m->data->state.creds) ||
+         !Curl_peer_equal(conn->creds_origin, m->data->state.origin)))
+       return FALSE;
+@@ -946,24 +957,6 @@
+       return FALSE;
+   }
+ #endif
+-  if(m->want_ntlm_http || m->want_proxy_ntlm_http) {
+-    /* Credentials are already checked, we may use this connection.
+-     * With NTLM being weird as it is, we MUST use a
+-     * connection where it has already been fully negotiated.
+-     * If it has not, we keep on looking for a better one. */
+-    m->found = conn;
+-
+-    if((m->want_ntlm_http &&
+-       (conn->http_ntlm_state != NTLMSTATE_NONE)) ||
+-        (m->want_proxy_ntlm_http &&
+-         (conn->proxy_ntlm_state != NTLMSTATE_NONE))) {
+-      /* We must use this connection, no other */
+-      m->force_reuse = TRUE;
+-      return TRUE;
+-    }
+-    /* Continue look up for a better connection */
+-    return FALSE;
+-  }
+   return TRUE;
+ }
+ #else
+@@ -984,8 +977,9 @@
+   }
+   else if(m->want_nego_http) {
+     /* Transfer wants Negotiate, connection is not using it.
+-     * Do not reuse when connection has credentials and they differ. */
+-    if(conn->creds &&
++     * Do not reuse when connection credentials state is bound to an origin
++     * and it or creds differ. */
++    if(conn->creds_origin &&
+        (!Curl_creds_same(conn->creds, m->data->state.creds) ||
+         !Curl_peer_equal(conn->creds_origin, m->data->state.origin)))
+       return FALSE;
+@@ -1004,21 +998,6 @@
+       return FALSE;
+   }
+ #endif
+-  if(m->want_nego_http || m->want_proxy_nego_http) {
+-    /* Credentials are already checked, we may use this connection. We MUST
+-     * use a connection where it has already been fully negotiated. If it has
+-     * not, we keep on looking for a better one. */
+-    m->found = conn;
+-    if((m->want_nego_http &&
+-        (conn->http_negotiate_state != GSS_AUTHNONE)) ||
+-       (m->want_proxy_nego_http &&
+-        (conn->proxy_negotiate_state != GSS_AUTHNONE))) {
+-      /* We must use this connection, no other */
+-      m->force_reuse = TRUE;
+-      return TRUE;
+-    }
+-    return FALSE; /* get another */
+-  }
+   return TRUE;
+ }
+ #else
+@@ -1028,7 +1007,7 @@
+ static bool url_match_conn(struct connectdata *conn, void *userdata)
+ {
+   struct url_conn_match *m = userdata;
+-  /* Check if `conn` can be used for transfer `m->data` */
++  bool wait_pipe = FALSE;
+ 
+   /* general connect config setting match? */
+   if(!url_match_connect_config(conn, m))
+@@ -1052,11 +1031,8 @@
+   if(!url_match_ssl_config(conn, m))
+     return FALSE;
+ 
+-  if(!url_match_http_multiplex(conn, m))
++  if(!url_match_http_multiplex(conn, m, &wait_pipe))
+     return FALSE;
+-  else if(m->wait_pipe)
+-    /* wait on multiplexing */
+-    return TRUE;
+ 
+   if(!url_match_auth(conn, m))
+     return FALSE;
+@@ -1066,17 +1042,22 @@
+ 
+   if(!url_match_auth_ntlm(conn, m))
+     return FALSE;
+-  else if(m->force_reuse)
+-    return TRUE;
+ 
+   if(!url_match_auth_nego(conn, m))
+     return FALSE;
+-  else if(m->force_reuse)
+-    return TRUE;
+ 
+   if(!url_match_multiplex_limits(conn, m))
+     return FALSE;
+ 
++  /* The connection matches all conditions, but do we want to use it? */
++  if(wait_pipe) {
++    /* The connection fits, but it's multiplex state has not been determined
++     * yet. Put the transfer into PENDING and wait for conn state change. */
++    DEBUGASSERT(!m->found);
++    m->wait_pipe = TRUE;
++    return TRUE;
++  }
++
+   if(m->data->set.conn_max_age_ms > 0) {
+     timediff_t age_ms = curlx_ptimediff_ms(&m->now, &conn->created);
+     if(age_ms > m->data->set.conn_max_age_ms) {
+@@ -1122,7 +1103,6 @@
+           "Found pending candidate for reuse and CURLOPT_PIPEWAIT is set");
+     match->wait_pipe = TRUE;
+   }
+-  match->force_reuse = FALSE;
+   return FALSE;
+ }
+ 
+@@ -1156,7 +1136,8 @@
+ #ifdef USE_NTLM
+   match.want_ntlm_http =
+     (data->state.authhost.want & CURLAUTH_NTLM) &&
+-    (needle->scheme->protocol & PROTO_FAMILY_HTTP);
++    (needle->scheme->protocol & PROTO_FAMILY_HTTP) &&
++    Curl_auth_allowed_to_host(data);
+ #ifndef CURL_DISABLE_PROXY
+   match.want_proxy_ntlm_http =
+     needle->http_proxy.creds &&
+@@ -1168,7 +1149,8 @@
+ #if !defined(CURL_DISABLE_HTTP) && defined(USE_SPNEGO)
+   match.want_nego_http =
+     (data->state.authhost.want & CURLAUTH_NEGOTIATE) &&
+-    (needle->scheme->protocol & PROTO_FAMILY_HTTP);
++    (needle->scheme->protocol & PROTO_FAMILY_HTTP) &&
++    Curl_auth_allowed_to_host(data);
+ #ifndef CURL_DISABLE_PROXY
+   match.want_proxy_nego_http =
+     needle->http_proxy.creds &&
+@@ -1224,9 +1206,10 @@
+   conn->transport_wanted = TRNSPRT_TCP; /* most of them are TCP streams */
+ 
+   /* Store the local bind parameters that will be used for this connection */
+-  if(CURL_EASY_STR(data, STRING_DEVICE)) {
+-    conn->localdev = curlx_strdup(CURL_EASY_STR(data, STRING_DEVICE));
+-    if(!conn->localdev)
++  if(CURL_EASY_STR(data, STRING_INTERFACE_OPT)) {
++    conn->interface_opts =
++      curlx_strdup(CURL_EASY_STR(data, STRING_INTERFACE_OPT));
++    if(!conn->interface_opts)
+       goto error;
+   }
+ #ifndef CURL_DISABLE_BINDLOCAL
+@@ -1244,7 +1227,7 @@
+   return conn;
+ error:
+ 
+-  curlx_free(conn->localdev);
++  curlx_free(conn->interface_opts);
+   curlx_free(conn);
+   return NULL;
+ }
+diff -urN a/lib/urldata.h b/lib/urldata.h
+--- a/lib/urldata.h
++++ b/lib/urldata.h
+@@ -353,7 +353,7 @@
+      made and will serve the purpose of being used for comparison reasons so
+      that subsequent bound-requested connections are not accidentally reusing
+      wrong connections. */
+-  char *localdev;
++  char *interface_opts;
+   struct ConnectBits bits;    /* various state-flags for this connection */
+ #if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+   int socks5_gssapi_enctype;
+@@ -418,6 +418,7 @@
+   curl_off_t numconnects; /* how many new connections libcurl created */
+   char *contenttype; /* the content type of the object */
+   char *wouldredirect; /* URL this would have been redirected to if asked to */
++  char *effective_url; /* when needed */
+   struct curl_slist *cookiechanges; /* accepted Set-Cookie mutations */
+   struct curl_slist *cookiechanges_tail; /* last cookie change */
+   struct curl_slist *redirect_history; /* followed redirects */
+@@ -750,9 +751,7 @@
+ #endif
+   STRING_CUSTOMREQUEST,   /* HTTP/FTP/RTSP request/method to use */
+   STRING_DEFAULT_PROTOCOL, /* Protocol to use when the URL does not specify */
+-  STRING_DEVICE,          /* local network interface/address to use */
+-  STRING_INTERFACE,       /* local network interface to use */
+-  STRING_BINDHOST,        /* local address to use */
++  STRING_INTERFACE_OPT,   /* CURLOPT_INTERFACE config */
+   STRING_ENCODING,        /* Accept-Encoding string */
+ #ifndef CURL_DISABLE_FTP
+   STRING_FTP_ACCOUNT,     /* ftp account data */
+diff -urN a/lib/vssh/libssh2.c b/lib/vssh/libssh2.c
+--- a/lib/vssh/libssh2.c
++++ b/lib/vssh/libssh2.c
+@@ -685,9 +685,19 @@
+             break;
+           }
+         }
+-        else {
+-          found = TRUE;
+-          break;
++        else if(store->key) {
++          int keycheck = libssh2_knownhost_checkp(
++            sshc->kh, conn->origin->hostname,
++            (conn->origin->port != PORT_SSH) ? conn->origin->port : -1,
++            store->key, strlen(store->key),
++            LIBSSH2_KNOWNHOST_TYPE_PLAIN |
++              LIBSSH2_KNOWNHOST_KEYENC_BASE64 |
++              (store->typemask & LIBSSH2_KNOWNHOST_KEY_MASK),
++            NULL);
++          if(keycheck == LIBSSH2_KNOWNHOST_CHECK_MATCH) {
++            found = TRUE;
++            break;
++          }
+         }
+       }
+     }
+diff -urN a/lib/vtls/gtls.c b/lib/vtls/gtls.c
+--- a/lib/vtls/gtls.c
++++ b/lib/vtls/gtls.c
+@@ -1694,8 +1694,8 @@
+         goto out;
+ 
+       for(i = 0; i < chain.num_certs; i++) {
+-        const char *beg = (const char *)chain.certs[i].data;
+-        const char *end = beg + chain.certs[i].size;
++        const uint8_t *beg = chain.certs[i].data;
++        const uint8_t *end = beg + chain.certs[i].size;
+ 
+         result = Curl_extract_certinfo(data, (int)i, beg, end);
+         if(result)
+diff -urN a/lib/vtls/mbedtls.c b/lib/vtls/mbedtls.c
+--- a/lib/vtls/mbedtls.c
++++ b/lib/vtls/mbedtls.c
+@@ -433,9 +433,8 @@
+   result = Curl_ssl_init_certinfo(data, cert_count);
+ 
+   for(i = 0, cur = crt; result == CURLE_OK && cur; ++i, cur = cur->next) {
+-    const char *beg = (const char *)cur->raw.p;
+-    const char *end = beg + cur->raw.len;
+-    result = Curl_extract_certinfo(data, i, beg, end);
++    result = Curl_extract_certinfo(data, i, cur->raw.p,
++                                   cur->raw.p + cur->raw.len);
+   }
+ }
+ 
+diff -urN a/lib/vtls/rustls.c b/lib/vtls/rustls.c
+--- a/lib/vtls/rustls.c
++++ b/lib/vtls/rustls.c
+@@ -1257,15 +1257,10 @@
+                   (int)errorlen, errorbuf);
+             return map_error(rresult);
+           }
+-          {
+-            const char *beg;
+-            const char *end;
+-            beg = (const char *)der_data;
+-            end = (const char *)(der_data + der_len);
+-            result = Curl_extract_certinfo(data, (int)i, beg, end);
+-            if(result)
+-              return result;
+-          }
++          result = Curl_extract_certinfo(data, (int)i,
++                                         der_data, der_data + der_len);
++          if(result)
++            return result;
+         }
+       }
+ 
+diff -urN a/lib/vtls/schannel.c b/lib/vtls/schannel.c
+--- a/lib/vtls/schannel.c
++++ b/lib/vtls/schannel.c
+@@ -780,7 +780,7 @@
+                        "names in server certificates."));
+   }
+ 
+-  if(!ssl_config->auto_client_cert) {
++  if(!conn_config->auto_client_cert) {
+     flags &= ~(DWORD)SCH_CRED_USE_DEFAULT_CREDS;
+     flags |= SCH_CRED_NO_DEFAULT_CREDS;
+     infof(data, "schannel: disabled automatic use of client certificate");
+@@ -850,7 +850,6 @@
+   struct schannel_ssl_backend_data *backend =
+     (struct schannel_ssl_backend_data *)connssl->backend;
+   struct ssl_primary_config *conn_config = Curl_ssl_cf_get_primary_config(cf);
+-  struct ssl_config_data *ssl_config = Curl_ssl_cf_get_config(cf, data);
+   SecBuffer outbuf;
+   SecBufferDesc outbuf_desc;
+   SecBuffer inbuf;
+@@ -978,7 +977,7 @@
+     ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT |
+     ISC_REQ_CONFIDENTIALITY | ISC_REQ_ALLOCATE_MEMORY |
+     ISC_REQ_STREAM |
+-    (!ssl_config->auto_client_cert ? ISC_REQ_USE_SUPPLIED_CREDS : 0);
++    (!conn_config->auto_client_cert ? ISC_REQ_USE_SUPPLIED_CREDS : 0);
+ 
+   /* allocate memory for the security context handle */
+   backend->ctxt = (struct Curl_schannel_ctxt *)
+@@ -1118,7 +1117,7 @@
+ 
+   do {
+     SECURITY_STATUS sspi_status;
+-    const char *x509_der;
++    uint8_t *x509_der;
+     DWORD x509_der_len;
+     struct Curl_X509certificate x509_parsed;
+     struct Curl_asn1Element *pubkey;
+@@ -1139,7 +1138,7 @@
+          (pCertContextServer->cbCertEncoded > 0)))
+       break;
+ 
+-    x509_der = (const char *)pCertContextServer->pbCertEncoded;
++    x509_der = (uint8_t *)pCertContextServer->pbCertEncoded;
+     x509_der_len = pCertContextServer->cbCertEncoded;
+     memset(&x509_parsed, 0, sizeof(x509_parsed));
+     if(Curl_parseX509(&x509_parsed, x509_der, x509_der + x509_der_len))
+@@ -1552,12 +1551,12 @@
+   struct Adder_args *args = (struct Adder_args *)raw_arg;
+   args->result = CURLE_OK;
+   if(valid_cert_encoding(ccert_context)) {
+-    const char *beg = (const char *)ccert_context->pbCertEncoded;
+-    const char *end = beg + ccert_context->cbCertEncoded;
+     int insert_index = reverse_order ? (args->certs_count - 1) - args->idx :
+                        args->idx;
+     args->result = Curl_extract_certinfo(args->data, insert_index,
+-                                         beg, end);
++                                         ccert_context->pbCertEncoded,
++                                         ccert_context->pbCertEncoded +
++                                         ccert_context->cbCertEncoded);
+     args->idx++;
+   }
+   return args->result == CURLE_OK;
+diff -urN a/lib/vtls/vtls_config.c b/lib/vtls/vtls_config.c
+--- a/lib/vtls/vtls_config.c
++++ b/lib/vtls/vtls_config.c
+@@ -196,6 +196,7 @@
+      (c1->verifypeer == c2->verifypeer) &&
+      (c1->verifyhost == c2->verifyhost) &&
+      (c1->verifystatus == c2->verifystatus) &&
++     (c1->auto_client_cert == c2->auto_client_cert) &&
+      (c1->enable_ticket == c2->enable_ticket) &&
+      (c1->http3_ssl_permute_extensions ==
+       c2->http3_ssl_permute_extensions) &&
+@@ -261,6 +262,7 @@
+   dest->http3_ssl_permute_extensions =
+     source->http3_ssl_permute_extensions;
+   dest->ssl_options = source->ssl_options;
++  dest->auto_client_cert = source->auto_client_cert;
+ 
+   CLONE_BLOB(cert_blob);
+   CLONE_BLOB(ca_info_blob);
+@@ -299,14 +301,15 @@
+    * If not, we switch it on for supported backends if no custom
+    * CA settings exist. */
+   sslc->primary.native_ca_store = !!(options & CURLSSLOPT_NATIVE_CA);
++  sslc->primary.auto_client_cert =
++    Curl_peer_equal(origin, initial_origin) &&
++    !!(options & CURLSSLOPT_AUTO_CLIENT_CERT);
++
+   sslc->enable_beast = !!(options & CURLSSLOPT_ALLOW_BEAST);
+   sslc->no_partialchain = !!(options & CURLSSLOPT_NO_PARTIALCHAIN);
+   sslc->no_revoke = !!(options & CURLSSLOPT_NO_REVOKE);
+   sslc->revoke_best_effort = !!(options & CURLSSLOPT_REVOKE_BEST_EFFORT);
+   sslc->earlydata = !!(options & CURLSSLOPT_EARLYDATA);
+-
+-  sslc->auto_client_cert = Curl_peer_equal(origin, initial_origin) &&
+-                           !!(options & CURLSSLOPT_AUTO_CLIENT_CERT);
+ }
+ 
+ static char *ssl_easy_steal(struct Curl_easy *data, enum dupstring id)
+diff -urN a/lib/vtls/vtls_config.h b/lib/vtls/vtls_config.h
+--- a/lib/vtls/vtls_config.h
++++ b/lib/vtls/vtls_config.h
+@@ -65,6 +65,8 @@
+   BIT(enable_ticket);    /* enable the TLS session ticket extension */
+   BIT(http3_ssl_permute_extensions); /* HTTP/3 TLS extension permutation */
+   BIT(deep_copy);        /* members are deep copies, eg. owned here */
++  BIT(auto_client_cert);   /* automatically locate and use a client
++                              certificate for authentication (Schannel) */
+ };
+ 
+ struct ssl_config_data {
+@@ -79,8 +81,6 @@
+   BIT(no_partialchain); /* do not accept partial certificate chains */
+   BIT(revoke_best_effort); /* ignore SSL revocation offline/missing revocation
+                               list errors */
+-  BIT(auto_client_cert);   /* automatically locate and use a client
+-                              certificate for authentication (Schannel) */
+   BIT(custom_cafile); /* application has set custom CA file */
+   BIT(custom_capath); /* application has set custom CA path */
+   BIT(custom_cablob); /* application has set custom CA blob */
+diff -urN a/lib/vtls/wolfssl.c b/lib/vtls/wolfssl.c
+--- a/lib/vtls/wolfssl.c
++++ b/lib/vtls/wolfssl.c
+@@ -1591,7 +1591,7 @@
+ 
+   if(pinnedpubkey) {
+ #ifdef KEEP_PEER_CERT
+-    const char *x509_der;
++    const uint8_t *x509_der;
+     int x509_der_len;
+     struct Curl_X509certificate x509_parsed;
+     struct Curl_asn1Element *pubkey;
+@@ -1604,7 +1604,7 @@
+       goto end;
+     }
+ 
+-    x509_der = (const char *)wolfSSL_X509_get_der(x509, &x509_der_len);
++    x509_der = wolfSSL_X509_get_der(x509, &x509_der_len);
+     if(!x509_der) {
+       failf(data, "SSL: failed retrieving ASN.1 server certificate");
+       goto end;
+diff -urN a/lib/vtls/x509asn1.c b/lib/vtls/x509asn1.c
+--- a/lib/vtls/x509asn1.c
++++ b/lib/vtls/x509asn1.c
+@@ -127,11 +127,11 @@
+ 
+ #define CURL_ASN1_MAX_RECURSIONS    16
+ 
+-static const char *getASN1Element_(struct Curl_asn1Element *elem,
+-                                   const char *beg, const char *end,
+-                                   size_t lvl)
++static const uint8_t *getASN1Element_(struct Curl_asn1Element *elem,
++                                      const uint8_t *beg, const uint8_t *end,
++                                      size_t lvl)
+ {
+-  unsigned char b;
++  uint8_t b;
+   size_t len;
+   struct Curl_asn1Element lelem;
+ 
+@@ -146,7 +146,7 @@
+ 
+   /* Process header byte. */
+   elem->header = beg;
+-  b = (unsigned char)*beg++;
++  b = *beg++;
+   elem->constructed = (b & 0x20) != 0;
+   elem->eclass = (b >> 6) & 3;
+   b &= 0x1F;
+@@ -157,7 +157,7 @@
+   /* Process length. */
+   if(beg >= end)
+     return NULL;
+-  b = (unsigned char)*beg++;
++  b = *beg++;
+   if(!(b & 0x80))
+     len = b;
+   else {
+@@ -178,7 +178,7 @@
+       elem->end = beg;
+       return beg + 1;
+     }
+-    else if((unsigned)b > (size_t)(end - beg))
++    else if(b > (size_t)(end - beg))
+       return NULL; /* Does not fit in source. */
+     else {
+       /* Get long length. */
+@@ -186,7 +186,7 @@
+       do {
+         if(len & 0xFF000000L)
+           return NULL;  /* Lengths > 32 bits are not supported. */
+-        len = (len << 8) | (unsigned char) *beg++;
++        len = (len << 8) | *beg++;
+       } while(--b);
+     }
+   }
+@@ -200,10 +200,10 @@
+ /*
+  * @unittest 1657
+  */
+-UNITTEST const char *getASN1Element(struct Curl_asn1Element *elem,
+-                                    const char *beg, const char *end);
+-UNITTEST const char *getASN1Element(struct Curl_asn1Element *elem,
+-                                    const char *beg, const char *end)
++UNITTEST const uint8_t *getASN1Element(struct Curl_asn1Element *elem,
++                                       const uint8_t *beg, const uint8_t *end);
++UNITTEST const uint8_t *getASN1Element(struct Curl_asn1Element *elem,
++                                       const uint8_t *beg, const uint8_t *end)
+ {
+   return getASN1Element_(elem, beg, end, 0);
+ }
+@@ -231,12 +231,12 @@
+  */
+ 
+ static CURLcode bool2str(struct dynbuf *store,
+-                         const char *beg, const char *end)
++                         const uint8_t *beg, const uint8_t *end)
+ {
+   uint8_t val;
+   if(end - beg != 1)
+     return CURLE_BAD_FUNCTION_ARGUMENT;
+-  val = (uint8_t)*beg;
++  val = *beg;
+   if((val != 0xff) && (val != 0x00))
+     return CURLE_BAD_FUNCTION_ARGUMENT;
+   return curlx_dyn_add(store, val ? "TRUE" : "FALSE");
+@@ -248,22 +248,23 @@
+  * Return error code.
+  */
+ static CURLcode octet2str(struct dynbuf *store,
+-                          const char *beg, const char *end)
++                          const uint8_t *beg, const uint8_t *end)
+ {
+   CURLcode result = CURLE_OK;
+ 
+   while(!result && beg < end)
+-    result = curlx_dyn_addf(store, "%02x:", (unsigned char)*beg++);
++    result = curlx_dyn_addf(store, "%02x:", *beg++);
+ 
+   return result;
+ }
+ 
+-static CURLcode bit2str(struct dynbuf *store, const char *beg, const char *end)
++static CURLcode bit2str(struct dynbuf *store,
++                        const uint8_t *beg, const uint8_t *end)
+ {
+   /* Convert an ASN.1 bit string to a printable string. */
+ 
+   if(beg < end) {
+-    uint8_t unused_bits = (uint8_t)*beg++;
++    uint8_t unused_bits = *beg++;
+     if(unused_bits > 7)
+       return CURLE_BAD_FUNCTION_ARGUMENT;
+   }
+@@ -277,13 +278,14 @@
+  *
+  * Returns error.
+  */
+-static CURLcode int2str(struct dynbuf *store, const char *beg, const char *end)
++static CURLcode int2str(struct dynbuf *store,
++                        const uint8_t *beg, const uint8_t *end)
+ {
+   uint32_t uval = 0;
+   int32_t sval = 0;
+   size_t n = end - beg;
+   size_t i;
+-  const unsigned char *p = (const unsigned char *)beg;
++  const uint8_t *p = beg;
+ 
+   if(!n)
+     return CURLE_BAD_FUNCTION_ARGUMENT;
+@@ -315,8 +317,8 @@
+  *
+  * Returns error.
+  */
+-static CURLcode utf8asn1str(struct dynbuf *to, int type, const char *from,
+-                            const char *end)
++static CURLcode utf8asn1str(struct dynbuf *to, int type,
++                            const uint8_t *from, const uint8_t *end)
+ {
+   size_t inlength = end - from;
+   int size = 1;
+@@ -357,14 +359,14 @@
+ 
+       switch(size) {
+       case 4:
+-        wc = (wc << 8) | *(const unsigned char *)from++;
+-        wc = (wc << 8) | *(const unsigned char *)from++;
++        wc = (wc << 8) | *from++;
++        wc = (wc << 8) | *from++;
+         FALLTHROUGH();
+       case 2:
+-        wc = (wc << 8) | *(const unsigned char *)from++;
++        wc = (wc << 8) | *from++;
+         FALLTHROUGH();
+       default: /* case 1: */
+-        wc = (wc << 8) | *(const unsigned char *)from++;
++        wc = (wc << 8) | *from++;
+       }
+       if(wc >= 0x00000080) {
+         if(wc >= 0x00000800) {
+@@ -404,9 +406,9 @@
+  * @unittest 1666
+  */
+ UNITTEST CURLcode encodeOID(struct dynbuf *store,
+-                            const char *beg, const char *end);
++                            const uint8_t *beg, const uint8_t *end);
+ UNITTEST CURLcode encodeOID(struct dynbuf *store,
+-                            const char *beg, const char *end)
++                            const uint8_t *beg, const uint8_t *end)
+ {
+   uint32_t x;
+   uint32_t y;
+@@ -417,7 +419,7 @@
+ 
+   /* Process the first two numbers. The initial digit cannot be larger than
+      2 */
+-  y = *(const unsigned char *)beg++;
++  y = *beg++;
+   if(y <= 80)
+     x = y / 40;
+   else
+@@ -434,7 +436,7 @@
+     do {
+       if((t & 0xFE000000) || (beg >= end))
+         return CURLE_BAD_FUNCTION_ARGUMENT;
+-      y = *(const unsigned char *)beg++;
++      y = *beg++;
+       t = (t << 7) | (y & 0x7F);
+     } while(y & 0x80);
+     y = t;
+@@ -454,7 +456,7 @@
+         return CURLE_BAD_FUNCTION_ARGUMENT;
+       else if((x & 0xFE000000) || (beg == end))
+         return CURLE_BAD_FUNCTION_ARGUMENT;
+-      y = *(const unsigned char *)beg++;
++      y = *beg++;
+       x = (x << 7) | (y & 0x7F);
+     } while(y & 0x80);
+     result = curlx_dyn_addf(store, ".%u", x);
+@@ -469,7 +471,7 @@
+  */
+ 
+ static CURLcode OID2str(struct dynbuf *store,
+-                        const char *beg, const char *end)
++                        const uint8_t *beg, const uint8_t *end)
+ {
+   CURLcode result = CURLE_OK;
+   if(beg < end) {
+@@ -651,10 +653,12 @@
+     result = OID2str(store, elem->beg, elem->end);
+     break;
+   case CURL_ASN1_UTC_TIME:
+-    result = UTime2str(store, elem->beg, elem->end);
++    result = UTime2str(store, (const char *)elem->beg,
++                       (const char *)elem->end);
+     break;
+   case CURL_ASN1_GENERALIZED_TIME:
+-    result = GTime2str(store, elem->beg, elem->end);
++    result = GTime2str(store, (const char *)elem->beg,
++                       (const char *)elem->end);
+     break;
+   case CURL_ASN1_UTF8_STRING:
+   case CURL_ASN1_NUMERIC_STRING:
+@@ -682,10 +686,10 @@
+   struct Curl_asn1Element atv;
+   struct Curl_asn1Element oid;
+   struct Curl_asn1Element value;
+-  const char *p1;
+-  const char *p2;
+-  const char *p3;
+-  const char *str;
++  const uint8_t *p1;
++  const uint8_t *p2;
++  const uint8_t *p3;
++  const uint8_t *str;
+   CURLcode result = CURLE_OK;
+   bool added = FALSE;
+   struct dynbuf temp;
+@@ -717,7 +721,7 @@
+       if(result)
+         goto error;
+ 
+-      str = curlx_dyn_ptr(&temp);
++      str = curlx_dyn_uptr(&temp);
+ 
+       if(!str) {
+         result = CURLE_BAD_FUNCTION_ARGUMENT;
+@@ -738,7 +742,7 @@
+       }
+ 
+       /* Encode attribute name. */
+-      result = curlx_dyn_add(store, str);
++      result = curlx_dyn_add(store, (const char *)str);
+       if(result)
+         goto error;
+ 
+@@ -770,13 +774,14 @@
+  * See RFC 5280.
+  */
+ int Curl_parseX509(struct Curl_X509certificate *cert,
+-                   const char *beg, const char *end)
++                   const uint8_t *beg, const uint8_t *end)
+ {
+   struct Curl_asn1Element elem;
+   struct Curl_asn1Element tbsCertificate;
+-  const char *ccp;
+-  static const char defaultVersion = 0;  /* v1. */
++  const uint8_t *ccp;
++  static const uint8_t defaultVersion = 0;  /* v1. */
+ 
++  memset(cert, 0, sizeof(*cert));
+   cert->certificate.header = NULL;
+   cert->certificate.beg = beg;
+   cert->certificate.end = end;
+@@ -832,6 +837,9 @@
+     return -1;
+   if(!getASN1Element(&cert->notAfter, ccp, elem.end))
+     return -1;
++  /* These two fields MUST consume all of the validity elem */
++  if(elem.end != cert->notAfter.end)
++    return -1;
+   /* Get subject. */
+   beg = getASN1Element(&cert->subject, beg, end);
+   if(!beg)
+@@ -852,10 +860,10 @@
+   cert->issuerUniqueID.tag = cert->subjectUniqueID.tag = 0;
+   cert->extensions.tag = elem.tag = 0;
+   cert->issuerUniqueID.header = cert->subjectUniqueID.header = NULL;
+-  cert->issuerUniqueID.beg = cert->issuerUniqueID.end = "";
+-  cert->subjectUniqueID.beg = cert->subjectUniqueID.end = "";
++  cert->issuerUniqueID.beg = cert->issuerUniqueID.end = beg;
++  cert->subjectUniqueID.beg = cert->subjectUniqueID.end = beg;
+   cert->extensions.header = NULL;
+-  cert->extensions.beg = cert->extensions.end = "";
++  cert->extensions.beg = cert->extensions.end = beg;
+   if(beg < end) {
+     beg = getASN1Element(&elem, beg, end);
+     if(!beg)
+@@ -889,7 +897,7 @@
+ 
+ static CURLcode dumpAlgo(struct dynbuf *store,
+                          struct Curl_asn1Element *param,
+-                         const char *beg, const char *end)
++                         const uint8_t *beg, const uint8_t *end)
+ {
+   struct Curl_asn1Element oid;
+ 
+@@ -902,7 +910,7 @@
+   param->tag = 0;
+   param->beg = param->end = end;
+   if(beg < end) {
+-    const char *p = getASN1Element(param, beg, end);
++    const uint8_t *p = getASN1Element(param, beg, end);
+     if(!p)
+       return CURLE_BAD_FUNCTION_ARGUMENT;
+   }
+@@ -973,7 +981,7 @@
+ {
+   struct Curl_asn1Element elem;
+   struct Curl_asn1Element pk;
+-  const char *p;
++  const uint8_t *p;
+ 
+   /* Generate all information records for the public key. */
+ 
+@@ -1005,7 +1013,7 @@
+     return 1;
+ 
+   if(curl_strequal(algo, "rsaEncryption")) {
+-    const char *q;
++    const uint8_t *q;
+     size_t len;
+ 
+     p = getASN1Element(&elem, pk.beg, pk.end);
+@@ -1018,7 +1026,7 @@
+     len = ((elem.end - q) * 8);
+     if(len) {
+       unsigned int i;
+-      for(i = *(const unsigned char *)q; !(i & 0x80); i <<= 1)
++      for(i = *q; !(i & 0x80); i <<= 1)
+         len--;
+     }
+     if(len > 32)
+@@ -1084,8 +1092,8 @@
+ 
+ CURLcode Curl_extract_certinfo(struct Curl_easy *data,
+                                int certnum,
+-                               const char *beg,
+-                               const char *end)
++                               const uint8_t *beg,
++                               const uint8_t *end)
+ {
+   struct Curl_X509certificate cert;
+   struct Curl_asn1Element param;
+@@ -1094,7 +1102,7 @@
+   struct dynbuf out;
+   CURLcode result = CURLE_OK;
+   unsigned int version;
+-  const char *ptr;
++  const uint8_t *ptr;
+   int rc;
+ 
+   if(!data->set.ssl.certinfo)
+@@ -1133,7 +1141,7 @@
+   /* Version (always fits in less than 32 bits). */
+   version = 0;
+   for(ptr = cert.version.beg; ptr < cert.version.end; ptr++)
+-    version = (version << 8) | *(const unsigned char *)ptr;
++    version = (version << 8) | *ptr;
+   if(data->set.ssl.certinfo) {
+     result = curlx_dyn_addf(&out, "%x", version);
+     if(result)
+diff -urN a/lib/vtls/x509asn1.h b/lib/vtls/x509asn1.h
+--- a/lib/vtls/x509asn1.h
++++ b/lib/vtls/x509asn1.h
+@@ -77,11 +77,11 @@
+ 
+ /* ASN.1 parsed element. */
+ struct Curl_asn1Element {
+-  const char *header;         /* Pointer to header byte. */
+-  const char *beg;            /* Pointer to element data. */
+-  const char *end;            /* Pointer to 1st byte after element. */
+-  unsigned char eclass;       /* ASN.1 element class. */
+-  unsigned char tag;          /* ASN.1 element tag. */
++  const uint8_t *header;      /* Pointer to header byte. */
++  const uint8_t *beg;         /* Pointer to element data. */
++  const uint8_t *end;         /* Pointer to 1st byte after element. */
++  uint8_t eclass;             /* ASN.1 element class. */
++  uint8_t tag;                /* ASN.1 element tag. */
+   BIT(constructed);           /* Element is constructed. */
+ };
+ 
+@@ -109,11 +109,11 @@
+  */
+ 
+ int Curl_parseX509(struct Curl_X509certificate *cert,
+-                   const char *beg, const char *end);
++                   const uint8_t *beg, const uint8_t *end);
+ CURLcode Curl_extract_certinfo(struct Curl_easy *data, int certnum,
+-                               const char *beg, const char *end);
++                               const uint8_t *beg, const uint8_t *end);
+ CURLcode Curl_verifyhost(struct Curl_cfilter *cf, struct Curl_easy *data,
+-                         const char *beg, const char *end);
++                         const uint8_t *beg, const uint8_t *end);
+ #endif /* USE_GNUTLS || USE_WOLFSSL || USE_SCHANNEL || USE_MBEDTLS ||
+           USE_RUSTLS */
+ #endif /* HEADER_CURL_X509ASN1_H */
+diff -urN a/src/config2setopts.c b/src/config2setopts.c
+--- a/src/config2setopts.c
++++ b/src/config2setopts.c
+@@ -202,12 +202,11 @@
+   return result;
+ }
+ 
+-static CURLcode ssh_setopts(struct OperationConfig *config, CURL *curl,
+-                            const char *use_proto)
++static CURLcode ssh_setopts(struct OperationConfig *config, CURL *curl)
+ {
+   CURLcode result;
+ 
+-  if(use_proto != proto_scp && use_proto != proto_sftp)
++  if(!proto_scp && !proto_sftp)
+     return CURLE_OK;
+ 
+   /* SSH and SSL private key uses same command-line option */
+@@ -236,7 +235,25 @@
+         if(!known)
+           return CURLE_OUT_OF_MEMORY;
+       }
++      else if(!config->hostpubmd5 && !config->hostpubsha256) {
++        /* couldn't find an existing one, instead set one that MIGHT work as
++           we don't verify the host using other means */
++        struct dynbuf k;
++        char *home = getenv("HOME");
++        curlx_dyn_init(&k, 256);
++
++        /* If the HOME environment variable is missing this renders a path
++           that is likely to not work but the HOME one also does not exist!
++        */
++        result = curlx_dyn_addf(&k,
++                                "%s" DIR_CHAR ".ssh" DIR_CHAR "known_hosts",
++                                home ? home : "");
++        if(result)
++          return result;
++        known = curlx_dyn_ptr(&k);
++      }
+     }
++
+     if(known) {
+       result = my_setopt_str(curl, CURLOPT_SSH_KNOWNHOSTS, known);
+       if(result) {
+@@ -247,12 +264,6 @@
+       /* store it in global to avoid repeated checks */
+       config->knownhosts = known;
+     }
+-    else if(!config->hostpubmd5 && !config->hostpubsha256) {
+-      errorf("Could not find a known_hosts file");
+-      return CURLE_FAILED_INIT;
+-    }
+-    else
+-      warnf("Could not find a known_hosts file");
+   }
+   return CURLE_OK; /* ignore if SHA256 did not work */
+ }
+@@ -1189,7 +1200,7 @@
+   if(result)
+     return result;
+ 
+-  result = ssh_setopts(config, curl, use_proto);
++  result = ssh_setopts(config, curl);
+   if(setopt_bad(result))
+     return result;
+ 
+diff -urN a/src/tool_cb_hdr.c b/src/tool_cb_hdr.c
+--- a/src/tool_cb_hdr.c
++++ b/src/tool_cb_hdr.c
+@@ -248,6 +248,28 @@
+   return rc;
+ }
+ 
++/* Store a header until the output filename has been decided. */
++static size_t buffer_header(struct HdrCbData *hdrcbdata,
++                            const char *str, size_t cb)
++{
++  char *clone = curlx_memdup0(str, cb);
++  if(clone) {
++    struct curl_slist *old = hdrcbdata->headlist;
++    hdrcbdata->headlist = curl_slist_append(old, clone);
++    curlx_free(clone);
++    if(!hdrcbdata->headlist) {
++      curl_slist_free_all(old);
++      return CURL_WRITEFUNC_ERROR;
++    }
++  }
++  else {
++    curl_slist_free_all(hdrcbdata->headlist);
++    hdrcbdata->headlist = NULL;
++    return CURL_WRITEFUNC_ERROR;
++  }
++  return cb;
++}
++
+ /*
+  * Write etag to file when --etag-save option is given.
+  */
+@@ -388,24 +410,8 @@
+ 
+   if(hdrcbdata->honor_cd_filename &&
+      hdrcbdata->config->show_headers) {
+-    /* still awaiting the Content-Disposition header, store the header in
+-       memory. Since it is not null-terminated, we need an extra dance. */
+-    char *clone = curlx_memdup0(str, cb);
+-    if(clone) {
+-      struct curl_slist *old = hdrcbdata->headlist;
+-      hdrcbdata->headlist = curl_slist_append(old, clone);
+-      curlx_free(clone);
+-      if(!hdrcbdata->headlist) {
+-        curl_slist_free_all(old);
+-        return CURL_WRITEFUNC_ERROR;
+-      }
+-    }
+-    else {
+-      curl_slist_free_all(hdrcbdata->headlist);
+-      hdrcbdata->headlist = NULL;
+-      return CURL_WRITEFUNC_ERROR;
+-    }
+-    return cb; /* done for now */
++    /* still awaiting the Content-Disposition header */
++    return buffer_header(hdrcbdata, str, cb);
+   }
+ 
+   return 0; /* ok */
+@@ -427,6 +433,7 @@
+   const size_t cb = size * nmemb;
+   const char *end = ptr + cb;
+   const char *scheme = NULL;
++  bool cd_checked = FALSE;
+ 
+   if(!per->config)
+     return CURL_WRITEFUNC_ERROR;
+@@ -486,6 +493,9 @@
+       size_t rc = content_disposition(str, end, cb, per, response);
+       if(rc)
+         return rc;
++      /* remember that this was checked to avoid duplicating it further
++         down */
++      cd_checked = TRUE;
+     }
+   }
+   if(hdrcbdata->config->writeout) {
+@@ -505,6 +515,13 @@
+     /* bold headers only for selected protocols */
+     const char *value = NULL;
+ 
++    /* Informational responses, and ETag headers handled by --etag-save,
++       bypass the content-disposition handling above. Do not open the output
++       file until the filename decision is complete. Only for HTTP(S). */
++    if(hdrcbdata->honor_cd_filename && !cd_checked &&
++       (scheme == proto_http || scheme == proto_https))
++      return buffer_header(hdrcbdata, str, cb);
++
+     if(!outs->stream && !tool_create_output_file(outs, per->config))
+       return CURL_WRITEFUNC_ERROR;
+ 
+diff -urN a/lib/url.c b/lib/url.c
+--- a/lib/url.c
++++ b/lib/url.c
+@@ -271,6 +271,7 @@
+   curlx_safefree(data->state.most_recent_ftp_entrypath);
+   curlx_safefree(data->info.contenttype);
+   curlx_safefree(data->info.wouldredirect);
++  curlx_safefree(data->info.effective_url);
+   curl_slist_free_all(data->info.cookiechanges);
+   Curl_free_redirects(data);
+ 

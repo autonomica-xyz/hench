@@ -28,6 +28,9 @@ data class WalletSendResult(
     val paymentId: String,
     val amountSats: Long,
     val feeSats: Long? = null,
+    /** Real 32-byte-hex Lightning preimage when the backend exposes one.
+     *  NWC `pay_invoice` requires it; null means "unknown", never a fallback id. */
+    val preimage: String? = null,
 )
 
 interface SpendableLightningWallet : LightningWallet {

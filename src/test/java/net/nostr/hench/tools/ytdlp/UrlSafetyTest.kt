@@ -27,6 +27,16 @@ class UrlSafetyTest {
     }
 
     @Test
+    fun rejectsIpv4EmbeddedInIpv6Literal() {
+        // ::10.0.0.1 parses as an Inet6Address whose hostAddress ends in a
+        // dotted v4 tail; a prefix-only fc/fd check would miss it.
+        val compat = UrlSafety.checkAnyHttpUrl("http://[::10.0.0.1]/x")
+        assertTrue("IPv6-compatible private literal must be rejected", compat is UrlSafety.Result.Reject)
+        val mapped = UrlSafety.checkAnyHttpUrl("http://[::ffff:10.0.0.1]/x")
+        assertTrue("IPv4-mapped private literal must be rejected", mapped is UrlSafety.Result.Reject)
+    }
+
+    @Test
     fun rejectsBlossomServerNotInAllowlist() {
         val r = UrlSafety.checkBlossom("https://evil.example/upload", listOf("https://blossom.test"))
         assertTrue(r is UrlSafety.Result.Reject)

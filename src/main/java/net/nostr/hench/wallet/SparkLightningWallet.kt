@@ -32,7 +32,10 @@ import java.util.Locale
 
 interface SparkSdkClient {
     suspend fun receiveBolt11Invoice(amountSats: ULong, memo: String, expirySecs: UInt = 3_600u): String
-    suspend fun listPayments(limit: UInt = 50u): List<SparkPaymentSnapshot>
+    /** Page through payment history; [offset] of null starts at the newest. */
+    suspend fun listPayments(limit: UInt = 50u, offset: UInt? = null): List<SparkPaymentSnapshot>
+    /** Direct lookup by SDK payment id; null when the id is unknown. */
+    suspend fun getPaymentOptional(paymentId: String): SparkPaymentSnapshot?
     suspend fun balanceSats(ensureSynced: Boolean = false): ULong
     suspend fun payBolt11Invoice(invoice: String): WalletSendResult
     suspend fun payLightningAddress(address: String, amountSats: ULong, comment: String = ""): WalletSendResult
@@ -48,6 +51,10 @@ data class SparkPaymentSnapshot(
     val feeSats: Long = 0,
     val timestampSecs: Long = 0,
     val description: String? = null,
+    /** Lightning/HTLC preimage once revealed; null before settle or for non-HTLC payments. */
+    val preimage: String? = null,
+    /** Payment hash of the HTLC, when known. */
+    val paymentHash: String? = null,
 )
 
 class BreezSparkSdkClient(
@@ -74,7 +81,7 @@ class BreezSparkSdkClient(
         return response.paymentRequest
     }
 
-    override suspend fun listPayments(limit: UInt): List<SparkPaymentSnapshot> {
+    override suspend fun listPayments(limit: UInt, offset: UInt?): List<SparkPaymentSnapshot> {
         val response = sdk().listPayments(
             ListPaymentsRequest(
                 typeFilter = null, // receives AND sends — the wallet UI shows both
@@ -83,28 +90,43 @@ class BreezSparkSdkClient(
                 paymentDetailsFilter = null,
                 fromTimestamp = null,
                 toTimestamp = null,
-                offset = null,
+                offset = offset,
                 limit = limit,
                 sortAscending = false,
             ),
         )
-        return response.payments.map { payment ->
-            val lightning = payment.details as? PaymentDetails.Lightning
-            SparkPaymentSnapshot(
-                id = payment.id,
-                invoice = lightning?.invoice,
-                status = when (payment.status) {
-                    PaymentStatus.COMPLETED -> InvoiceStatus.Settled
-                    PaymentStatus.PENDING -> InvoiceStatus.Pending
-                    PaymentStatus.FAILED -> InvoiceStatus.Expired
-                },
-                isReceive = payment.paymentType == PaymentType.RECEIVE,
-                amountSats = payment.amount.toLong(),
-                feeSats = payment.fees.toLong(),
-                timestampSecs = payment.timestamp.toLong(),
-                description = lightning?.description,
-            )
-        }
+        return response.payments.map(::toSnapshot)
+    }
+
+    /** Map an SDK payment to the wallet's snapshot, keeping the HTLC details
+     *  (preimage/payment hash) that NWC callers need. */
+    private fun toSnapshot(payment: breez_sdk_spark.Payment): SparkPaymentSnapshot {
+        val lightning = payment.details as? PaymentDetails.Lightning
+        val spark = payment.details as? PaymentDetails.Spark
+        return SparkPaymentSnapshot(
+            id = payment.id,
+            invoice = lightning?.invoice,
+            status = when (payment.status) {
+                PaymentStatus.COMPLETED -> InvoiceStatus.Settled
+                PaymentStatus.PENDING -> InvoiceStatus.Pending
+                PaymentStatus.FAILED -> InvoiceStatus.Expired
+                else -> InvoiceStatus.Unknown
+            },
+            isReceive = payment.paymentType == PaymentType.RECEIVE,
+            amountSats = payment.amount.toLong(),
+            feeSats = payment.fees.toLong(),
+            timestampSecs = payment.timestamp.toLong(),
+            description = lightning?.description,
+            preimage = (lightning?.htlcDetails?.preimage ?: spark?.htlcDetails?.preimage)
+                ?.takeIf { it.isNotBlank() },
+            paymentHash = lightning?.htlcDetails?.paymentHash ?: spark?.htlcDetails?.paymentHash,
+        )
+    }
+
+    override suspend fun getPaymentOptional(paymentId: String): SparkPaymentSnapshot? = runCatching {
+        sdk().getPayment(breez_sdk_spark.GetPaymentRequest(paymentId)).payment
+    }.getOrNull()?.let { payment ->
+        toSnapshot(payment)
     }
 
     override suspend fun balanceSats(ensureSynced: Boolean): ULong {
@@ -128,9 +150,12 @@ class BreezSparkSdkClient(
                 idempotencyKey = UUID.randomUUID().toString(),
             ),
         )
+        val snapshot = toSnapshot(response.payment)
         return WalletSendResult(
-            paymentId = response.payment.id,
-            amountSats = response.payment.amount.toLong(),
+            paymentId = snapshot.id,
+            amountSats = snapshot.amountSats,
+            feeSats = snapshot.feeSats,
+            preimage = snapshot.preimage,
         )
     }
 
@@ -143,7 +168,7 @@ class BreezSparkSdkClient(
         }
         val prepare = sdk().prepareLnurlPay(
             PrepareLnurlPayRequest(
-                amount = BigInteger.valueOf(amountSats.toLong() * 1_000L),
+                amount = amountSats.toBigInteger() * BigInteger.valueOf(1_000L),
                 payRequest = payRequest,
                 comment = comment.takeIf { it.isNotBlank() },
                 validateSuccessActionUrl = true,
@@ -180,7 +205,7 @@ class SparkLightningWallet(
     private val client: SparkSdkClient,
 ) : SpendableLightningWallet {
     override suspend fun createInvoice(amountMsat: Long, memo: String): PaymentInvoice {
-        require(amountMsat > 0) { "amountMsat must be positive" }
+        require(amountMsat > 0 && amountMsat <= Long.MAX_VALUE - 999L) { "amountMsat out of range" }
         val amountSats = ((amountMsat + 999L) / 1_000L).toULong()
         val invoice = client.receiveBolt11Invoice(amountSats, memo)
         val paymentId = client.listPayments().firstOrNull { it.invoice == invoice }?.id ?: invoice
@@ -194,8 +219,24 @@ class SparkLightningWallet(
 
     override suspend fun lookupInvoice(invoiceId: String): InvoiceStatus {
         runCatching { client.balanceSats(ensureSynced = true) }
-        return client.listPayments().firstOrNull { it.id == invoiceId || it.invoice == invoiceId }?.status
-            ?: InvoiceStatus.Unknown
+        // Try the cheap direct lookup first (invoiceId is usually our own
+        // payment id), then fall back to a full-history scan. The previous
+        // code listed only the newest 50 payments — older invoices silently
+        // reported Unknown, which failed paid work.
+        client.getPaymentOptional(invoiceId)?.let { return it.status }
+        val isBolt11 = invoiceId.startsWith("ln")
+        var offset: UInt? = null
+        while (true) {
+            val page = client.listPayments(limit = LOOKUP_PAGE_SIZE, offset = offset)
+            val match = page.firstOrNull {
+                it.id == invoiceId ||
+                    it.invoice?.equals(invoiceId, ignoreCase = true) == true ||
+                    (!isBolt11 && it.paymentHash.equals(invoiceId, ignoreCase = true))
+            }
+            if (match != null) return match.status
+            if (page.size < LOOKUP_PAGE_SIZE.toInt()) return InvoiceStatus.Unknown
+            offset = (offset ?: 0u) + page.size.toUInt()
+        }
     }
 
     override suspend fun balanceSats(): Long = client.balanceSats(ensureSynced = true).toLong()
@@ -218,6 +259,8 @@ fun generateSparkSeedHex(byteCount: Int = 16): String {
     SecureRandom().nextBytes(bytes)
     return bytes.toHex()
 }
+
+private const val LOOKUP_PAGE_SIZE = 100u
 
 fun String.hexToBytes(): ByteArray {
     val clean = trim().lowercase(Locale.US)

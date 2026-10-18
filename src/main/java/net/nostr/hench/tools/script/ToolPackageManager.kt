@@ -61,15 +61,23 @@ object ToolPackageManager {
      * (or the zip's single root directory) is treated as one package. Returns
      * the installed package dirs. Rejects path traversal entries.
      */
-    fun installFromZip(context: Context, zipStream: java.io.InputStream): List<File> {
-        val target = internalToolsDir(context)
+    fun installFromZip(context: Context, zipStream: java.io.InputStream): List<File> =
+        installFromZip(internalToolsDir(context), zipStream)
+
+    /** Install into [target] — split from the Context overload so the traversal guard is unit-testable. */
+    fun installFromZip(target: File, zipStream: java.io.InputStream): List<File> {
         val installed = mutableListOf<File>()
+        val targetPath = target.canonicalFile.path
         ZipInputStream(zipStream.buffered()).use { zis ->
             while (true) {
                 val entry = zis.nextEntry ?: break
                 val name = entry.name
-                if (name.contains("..")) continue // traversal guard
+                if (name.contains("..") || File(name).isAbsolute) continue
                 val out = File(target, name)
+                // Also reject paths that escape through an existing symlink.
+                if (out.canonicalFile.path != targetPath && !out.canonicalFile.path.startsWith("$targetPath/")) {
+                    continue
+                }
                 if (entry.isDirectory) {
                     out.mkdirs()
                 } else {

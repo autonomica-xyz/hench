@@ -144,8 +144,14 @@ class WalletActivity : Activity() {
                 val uri = connection.toUri()
                 copy("hench NWC connection", uri)
                 nwcUriOut.text = uri
+                // The service only runs the NWC server once a connection exists
+                // (peek-gated) — reload so it comes up (or is left off when the
+                // worker is disabled).
+                val intent = Intent(this@WalletActivity, net.nostr.hench.service.WorkerForegroundService::class.java).apply {
+                    action = net.nostr.hench.service.WorkerForegroundServiceContract.ACTION_RELOAD_SETTINGS
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
             },
-            helper("Uses the same configured Nostr relays as worker communication. Supported: ${NwcServerConnection.supportedMethodsCsv()}. Keep this URI private; it can spend wallet funds."),
             nwcUriOut,
         )))
 

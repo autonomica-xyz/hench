@@ -517,15 +517,149 @@ class PaymentGateHandlerTest {
         assertEquals("evt-1", gate.replayed.single())
     }
 
-    // --- helpers ------------------------------------------------------------
+    // --- MEDIUM-1 admission bound + poll ownership --------------------------
 
-    private fun buildHandler(scope: TestScope, inFlight: MutableSet<String> = mutableSetOf()): TestHarness {
+    @Test
+    fun unpaidAdmissionBoundRejectsNewInvoices() = runTest {
+        val (gate, wallet, handler, store) = buildHandler(this, maxUnpaidRecords = 2)
+        // Two live unpaid records already admitted.
+        repeat(2) { i ->
+            store.putPayment(
+                PaymentRecord(
+                    canonicalInvocationId = "clientA:unpaid$i",
+                    payReq = "lnbc1unpaid$i",
+                    amountSats = 60L,
+                    pmi = "bitcoin-lightning-bolt11",
+                    status = PaymentRecord.STATUS_PENDING,
+                    ttlSecs = 300L,
+                ),
+            )
+        }
+
+        val event = sampleEvent("evt-x", "clientA:newwork", mode = "full")
+        val job = handler.handle(event, this)
+
+        assertNull(job)
+        assertEquals(0, wallet.createCount) // never reached the wallet
+        assertEquals(0, gate.submitted.size)
+        assertNull(store.getPayment("clientA:newwork"))
+    }
+
+    @Test
+    fun pruneExpiresWalletDeadRecordsToMakeRoom() = runTest {
+        val (gate, wallet, handler, store) = buildHandler(this, maxUnpaidRecords = 1)
+        // One FAILED record past the retention window; FakeLightningWallet
+        // returns Unknown for it, so prune may delete it.
+        store.putPayment(
+            PaymentRecord(
+                canonicalInvocationId = "clientA:dead",
+                payReq = "lnbc1dead",
+                amountSats = 60L,
+                pmi = "bitcoin-lightning-bolt11",
+                status = PaymentRecord.STATUS_FAILED,
+                submittedAt = System.currentTimeMillis() - 48L * 60 * 60 * 1_000L,
+            ),
+        )
+
+        val event = sampleEvent("evt-1", "clientA:abc123", mode = "full")
+        val job = handler.handle(event, this)
+
+        assertNull(store.getPayment("clientA:dead")) // expired unpaid record pruned
+        assertEquals(1, gate.submitted.size)          // new invoice admitted
+        job?.cancel()
+    }
+
+    @Test
+    fun pruneNeverDropsARecordTheWalletSettled() = runTest {
+        val (gate, wallet, handler, store) = buildHandler(this, maxUnpaidRecords = 1)
+        store.putPayment(
+            PaymentRecord(
+                canonicalInvocationId = "clientA:latepaid",
+                payReq = "lnbc1latepaid",
+                amountSats = 60L,
+                pmi = "bitcoin-lightning-bolt11",
+                status = PaymentRecord.STATUS_FAILED,
+                paymentId = "pid-latepaid",
+                submittedAt = System.currentTimeMillis() - 48L * 60 * 60 * 1_000L,
+            ),
+        )
+        // The wallet says this invoice actually settled — the record must heal,
+        // not be deleted, so its replay protection survives.
+        wallet.markSettled("pid-latepaid")
+
+        val event = sampleEvent("evt-1", "clientA:abc123", mode = "full")
+        val job = handler.handle(event, this)
+
+        assertEquals(PaymentRecord.STATUS_SETTLED, store.getPayment("clientA:latepaid")?.status)
+        job?.cancel()
+    }
+
+    @Test
+    fun rebindSharesOneSettlePollJob() = runTest {
+        val (gate, wallet, handler, store) = buildHandler(this)
+        val canonical = "clientA:abc123"
+
+        val job1 = handler.handle(sampleEvent("evt-1", canonical, "full"), this)
+        val job2 = handler.handle(sampleEvent("evt-2", canonical, "full"), this)
+
+        // The second delivery rebinds to the same invoice AND reuses the same
+        // poll coroutine — no independent wallet-poll fan-out.
+        assertEquals(1, wallet.createCount)
+        org.junit.Assert.assertSame(job1, job2)
+        job1?.cancel()
+    }
+
+    @Test
+    fun settlePollFinalLookupCatchesSettlementAtDeadline() = runTest {
+        // Regression: the poll used to write FAILED as soon as the TTL lapsed.
+        // If the wallet settled just before the deadline, the record must land
+        // SETTLED (replay protection) and the gate must be told.
         val settings = sampleSettings()
         val registry = net.nostr.hench.tools.ToolRegistry(
             net.nostr.hench.tools.ytdlp.YtdlpTool(null, settings, null, InMemoryPaymentSessionStore())
         )
         val gate = FakePaymentGateApi()
-        val wallet = FakeLightningWallet()
+        val store = InMemoryPaymentSessionStore()
+        val lateSettleWallet = object : net.nostr.hench.wallet.LightningWallet {
+            private var lookups = 0
+            private var lastId = ""
+            override suspend fun createInvoice(amountMsat: Long, memo: String) =
+                net.nostr.hench.wallet.PaymentInvoice("pid-late", amountMsat, memo, "lnbc1late").also { lastId = it.id }
+            override suspend fun lookupInvoice(invoiceId: String): InvoiceStatus {
+                lookups++
+                return if (lookups == 1) InvoiceStatus.Pending else InvoiceStatus.Settled
+            }
+        }
+        val handler = PaymentGateHandler(
+            paymentGate = gate,
+            wallet = lateSettleWallet,
+            registry = registry,
+            store = store,
+            settings = settings,
+            paymentTtlCapSecs = 1UL,
+        )
+
+        val job = handler.handle(sampleEvent("evt-1", "clientA:abc123", "full"), this)
+        advanceTimeBy(2_000)
+        job?.join()
+
+        assertEquals(PaymentRecord.STATUS_SETTLED, store.getPayment("clientA:abc123")?.status)
+        assertEquals(1, gate.settled.size)
+    }
+
+    // --- helpers ------------------------------------------------------------
+
+    private fun buildHandler(
+        scope: TestScope,
+        inFlight: MutableSet<String> = mutableSetOf(),
+        wallet: FakeLightningWallet = FakeLightningWallet(),
+        maxUnpaidRecords: Int = 64,
+    ): TestHarness {
+        val settings = sampleSettings()
+        val registry = net.nostr.hench.tools.ToolRegistry(
+            net.nostr.hench.tools.ytdlp.YtdlpTool(null, settings, null, InMemoryPaymentSessionStore())
+        )
+        val gate = FakePaymentGateApi()
         val store = InMemoryPaymentSessionStore()
         val updates = mutableListOf<JobUpdate>()
         val handler = PaymentGateHandler(
@@ -537,10 +671,10 @@ class PaymentGateHandlerTest {
             paymentTtlCapSecs = 300UL,
             onJobUpdate = { updates.add(it) },
             isExecutionInFlight = { canonical -> canonical in inFlight },
+            maxUnpaidRecords = maxUnpaidRecords,
         )
         return TestHarness(gate, wallet, handler, store, updates, inFlight)
     }
-
     private data class TestHarness(
         val gate: FakePaymentGateApi,
         val wallet: FakeLightningWallet,

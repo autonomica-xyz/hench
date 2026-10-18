@@ -58,8 +58,16 @@ data class ToolCallContext(
     val clientPubkey: String get() = incoming.clientPubkey
     val jsonRpcId: String get() = incoming.jsonRpcId
 
+    // Hash a real JSON array (PLAN §4). Client-controlled fields are encoded
+    // as JSON strings — interpolating them into a raw JSON literal would let
+    // crafted quotes/commas collide distinct inputs into the same key.
     val idempotencyKey: String get() =
-        sha256Hex("""["${incoming.clientPubkey}","${incoming.jsonRpcId}","$toolName","$argsHash"]""")
+        sha256Hex(canonical(buildJsonArray {
+            add(JsonPrimitive(incoming.clientPubkey))
+            add(JsonPrimitive(incoming.jsonRpcId))
+            add(JsonPrimitive(toolName))
+            add(JsonPrimitive(argsHash))
+        }))
 }
 
 /** Parse tool fields from an incoming tools/call request; null if malformed. */

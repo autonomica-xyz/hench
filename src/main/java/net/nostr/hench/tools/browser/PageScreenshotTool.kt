@@ -26,8 +26,9 @@ import net.nostr.hench.worker.PaymentSessionStoreI
 
 /**
  * The page_screenshot MCP tool: render a URL in a real on-device browser and
- * return a PNG hosted on Blossom. Real JS execution + real sessions — visual
- * ground truth for agents (UI checks, listing verification, page monitoring).
+ * return a PNG hosted on Blossom. Real JS execution in an isolated,
+ * unauthenticated WebView profile — visual ground truth for agents (UI checks,
+ * listing verification, page monitoring).
  */
 class PageScreenshotTool(
     private val context: Context?,
@@ -42,7 +43,7 @@ class PageScreenshotTool(
 
     override val name: String = "page_screenshot"
     override val description: String =
-        "Render a URL in a real mobile browser (full JS, real sessions) and return a screenshot PNG. Viewport-sized; use wait_for for JS-heavy pages."
+        "Render a URL in a real mobile browser (full JS, unauthenticated session) and return a screenshot PNG. Viewport-sized; use wait_for for JS-heavy pages."
     override val priceRangeSats: LongRange = priceSats..priceSats
     override fun quoteSats(args: JsonObject): Long = priceSats
 
@@ -123,6 +124,18 @@ class PageScreenshotTool(
             val err = ToolResult.errorJson("TIMEOUT", "page did not finish loading within ${timeoutSecs}s")
             store.put(record(ctx, err))
             err
+        } catch (e: UrlPolicyRejected) {
+            val err = ToolResult.errorJson(e.code, e.message ?: "destination blocked")
+            store.put(record(ctx, err))
+            err
+        } catch (e: BrowserIsolationUnsupported) {
+            val err = ToolResult.errorJson("BROWSER_UNAVAILABLE", e.message ?: "WebView profile isolation unsupported")
+            store.put(record(ctx, err))
+            err
+        } catch (e: IllegalArgumentException) {
+            val err = ToolResult.errorJson("INVALID_PARAMS", e.message ?: "bad argument")
+            store.put(record(ctx, err))
+            err
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             val err = ToolResult.errorJson("UPLOAD", e.message ?: "screenshot/upload failed")
@@ -142,6 +155,8 @@ class PageScreenshotTool(
         for (server in servers) {
             repeat(UPLOAD_ATTEMPTS) { attempt ->
                 try {
+                    // HttpBlossomClient validates the server-returned blob URL
+                    // (public http(s) only) and DNS-guards every request hop.
                     val result = blossomClientFactory(server, 60L).upload(file)
                     // Verify-after-upload: some Blossom frontends ACK a PUT the
                     // storage layer never actually serves (seen on-device with
@@ -162,9 +177,15 @@ class PageScreenshotTool(
         throw lastError ?: IllegalStateException("no Blossom servers configured")
     }
 
+
     private fun blobIsServed(url: String): Boolean = runCatching {
         okhttp3.OkHttpClient.Builder()
             .callTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .dns(UrlSafety.publicOnlyDns())
+            // Redirects refused outright: the DNS hook never sees literal-IP
+            // redirect targets, so following 3xx would bypass the guard.
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build()
             .newCall(okhttp3.Request.Builder().url(url).head().build())
             .execute()

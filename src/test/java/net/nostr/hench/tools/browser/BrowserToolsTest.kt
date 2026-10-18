@@ -12,9 +12,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * JVM tests for the browser tools' pure contract: URL policy (denylist,
- * scheme, SSRF), quoting, preflight, and registry-driven capability rows.
- * Rendering itself is on-device only (WebView).
+ * JVM tests for the browser tools' pure contract: URL policy (scheme, SSRF),
+ * JS-literal quoting for wait_for selectors, preflight, and registry-driven
+ * capability rows. Rendering, redirect, and session-isolation behavior are
+ * covered by the on-device tests in androidTest (WebView required).
  */
 class BrowserToolsTest {
 
@@ -73,23 +74,23 @@ class BrowserToolsTest {
         }
     }
 
+
     @Test
-    fun preflightRejectsSensitiveSessionHosts() {
+    fun jsStringLiteralRoundTripsThroughQuotes() {
+        assertEquals("\"a\\\\'b\\\"c\"", BrowserRenderer.jsStringLiteral("a\\'b\"c"))
+        assertEquals("\"plain\"", BrowserRenderer.jsStringLiteral("plain"))
+    }
+
+    @Test
+    fun preflightAllowsFormerDenylistHostsUnderIsolatedProfile() {
+        // Session safety comes from the unauthenticated WebView profile, not a
+        // host denylist — these pass the public-URL policy like any other host.
         for (url in listOf(
             "https://mail.google.com/mail/u/0/#inbox",
             "https://accounts.google.com/signin",
-            "https://www.paypal.com/summary",
-            "https://secure.chase.com/web/auth/dashboard",
             "https://web.whatsapp.com/",
-            "https://evil.paypal.com.login.example.com/", // suffix rule must NOT fire on this
         )) {
-            if (url.startsWith("https://evil.")) {
-                // registrable-domain is not a .paypal.com suffix — allowed by suffix rule,
-                // still must pass only generic checks (no crash).
-                assertNull(BrowserUrlPolicy.check(url)!!.takeIf { it.reason.contains("denylist") })
-            } else {
-                assertNotNull("should reject $url", webFetch().preflight(args(url)))
-            }
+            assertNull("should allow $url", BrowserUrlPolicy.check(url))
         }
     }
 

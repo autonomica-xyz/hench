@@ -1,0 +1,137 @@
+Third-party components bundled in this application
+===================================================
+
+Hench's own source code is MIT licensed (see LICENSE in the source
+repository). The APK additionally bundles third-party components, each of
+which retains its own license. The youtubedl-android wrappers and FFmpeg
+build impose GPL distribution obligations. The full GPL-3.0 text ships
+alongside this file (gpl-3.0.txt). Distributors must also provide the
+applicable corresponding source and build inputs; license text alone is
+not sufficient. Pinned recipes and local patches are in native-*/.
+
+youtubedl-android (Java wrappers: library/ffmpeg/common, version 0.18.1)
+    License: GPL-3.0
+    Source: https://github.com/yausername/youtubedl-android (tag 0.18.1)
+
+FFmpeg 9.0.2 (libffmpeg.so / libffprobe.so)
+    Local backports: f5d4fd186c68 (RTSP redirect bound) and
+    a7b20ee10335 (sample-rate validation), recorded in native-ffmpeg/.
+    License: GPL-3.0 — the shipped build is configured with
+    --enable-gpl --enable-version3 (Termux Android build, termux-main).
+    Source: https://ffmpeg.org/releases/ ; build recipe and pinned deb
+    provenance in native-ffmpeg/ (SOURCES.txt inside the runtime zip).
+
+yt-dlp (bundled Python package, auto-updating media downloader runtime)
+    License: Unlicense
+    Source: https://github.com/yt-dlp/yt-dlp
+
+Python 3.14.6 (embedded interpreter, libpython.so / libpython.zip.so)
+    Bundled support libraries: OpenSSL 3.6.5 (Apache-2.0), SQLite 3.54.1
+    (public domain), zlib 1.3.2, xz/liblzma 5.8.4 (public domain),
+    expat 2.9.0, bzip2 1.0.8, libffi 3.8.0, zstd 1.5.7, ncurses,
+    readline (GPL), gdbm (GPL).
+    License: PSF License Agreement
+    Source: https://www.python.org/ ; build recipe in native-python/
+
+Mutagen 1.48.1 / Cryptodomex 3.24.1 (Python media metadata and cryptography)
+    Licenses: Mutagen — GPL-2.0-or-later; Cryptodomex — BSD-2-Clause and
+    public-domain components. Notices are preserved in the runtime payload.
+    Sources: https://github.com/quodlibet/mutagen
+    https://github.com/Legrandin/pycryptodome
+
+QuickJS 2026-06-04 (libqjs.so JavaScript runtime used by yt-dlp)
+    License: MIT
+    Source: https://bellard.org/quickjs/ ; build recipe in native-python/
+
+curl_cffi 0.16.3 / curl 8.22.0-IMPERSONATE with 20 security backports
+    Source and patch pins: native-curl/ (local bundle revision +hench.1).
+    Licenses: curl_cffi/cffi — MIT; libcurl — curl license;
+    BoringSSL and compression/HTTP components retain their own licenses.
+    Full notices are in the Python package's licenses/ directory.
+    certifi 2026.7.22 is MPL-2.0.
+    Sources: https://github.com/lexiforest/curl_cffi
+    https://github.com/lexiforest/curl-impersonate ; https://curl.se/
+
+Breez SDK Spark 0.26.1 (bindings-android)
+    Native dependency patches and SQLite 3.53.2 rebuild: native-spark/.
+    License: MIT; SQLite amalgamation is public domain.
+    Source: https://github.com/breez/spark-sdk
+
+ContextVM FFI / nostr-net SDK (libcontextvm_ffi.so)
+    License: MIT — copyright Kosti Rytkönen and ContextVM contributors
+    Source: https://github.com/nostr-net/rs-sdk at commit 2cf7e6c
+    (contextvm-sdk core + contextvm-ffi). Canonical pinned build inputs and
+    instructions live in this repository under native/.
+
+JNA (net.java.dev.jna, UniFFI binding loader)
+    License: LGPL-2.1 OR Apache-2.0 (dual)
+    Source: https://github.com/java-native-access/jna
+
+libc++ (libc++_shared.so, Android NDK C++ runtime)
+    License: Apache-2.0 WITH LLVM-exception
+    Source: https://llvm.org/
+
+XZ for Java 1.12 (Commons Compress ZIP codec)
+    License: 0BSD
+    Source: https://tukaani.org/xz/java.html
+
+Zstd JNI 1.5.7-23 (Android ZIP codec)
+    Source: https://github.com/luben/zstd-jni (tag v1.5.7-23)
+
+Copyright (c) 2015-present, Luben Karavelov/ All rights reserved.
+
+BSD-2-Clause License https://opensource.org/license/bsd-2-clause
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Zstandard native library in Zstd JNI
+==================================
+BSD License
+
+For Zstandard software
+
+Copyright (c) 2016-present, Facebook, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook nor the names of its contributors may be used to
+   endorse or promote products derived from this software without specific
+   prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

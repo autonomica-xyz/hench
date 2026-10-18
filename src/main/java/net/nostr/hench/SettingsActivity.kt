@@ -339,7 +339,6 @@ class SettingsActivity : Activity() {
             // Platform settings persist via CookieStore, not SharedPreferences fields
             allowedPlatforms = emptyList(),
             blockedPlatforms = emptyList(),
-            healthCheckSettings = net.nostr.hench.auth.PlatformHealthChecker.PlatformHealthSettings(),
         )
         fun refreshStatus(candidate: WorkerSettings) {
             val issues = candidate.validate()

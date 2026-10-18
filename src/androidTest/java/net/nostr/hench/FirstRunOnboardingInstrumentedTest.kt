@@ -13,26 +13,43 @@ import net.nostr.hench.settings.OnboardingDefaults
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Test
 
+/**
+ * Verifies the real first-run contract: launching MainActivity on a fresh
+ * install auto-creates the Spark wallet, derives the Nostr identity, marks
+ * onboarding complete, and enables the worker — with NO manual
+ * "Create wallet & turn worker on" step.
+ *
+ * Runs against an isolated QA applicationId. This test NEVER clears shared
+ * preferences: a debug install carrying a real wallet would be wiped.
+ */
 class FirstRunOnboardingInstrumentedTest {
     @Test
     fun firstLaunchAutoConfiguresNativeWalletAndTurnsWorkerOn() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        context.getSharedPreferences("worker", Context.MODE_PRIVATE).edit().clear().commit()
-        context.getSharedPreferences("worker_stats", Context.MODE_PRIVATE).edit().clear().commit()
-        context.getSharedPreferences("processed_jobs", Context.MODE_PRIVATE).edit().clear().commit()
+        val repository = SharedPreferencesSettingsRepository(context)
+        assumeFalse(
+            "onboarding already complete — run on a fresh QA install, never on a device with a real wallet",
+            repository.isOnboardingComplete(),
+        )
 
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val button = findButton(activity.window.decorView, "Create wallet & turn worker on")
-                assertNull("fresh launch should skip manual onboarding", button)
+                assertNull("fresh launch should auto-configure, not offer manual onboarding", button)
             }
         }
 
-        val repository = SharedPreferencesSettingsRepository(context)
+        // First-run configuration happens on an IO coroutine; poll instead of racing it.
+        val deadline = System.currentTimeMillis() + 30_000
+        while (!repository.isOnboardingComplete() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(250)
+        }
+        assertTrue("first-run configuration did not complete within 30s", repository.isOnboardingComplete())
+
         val settings = repository.load()
-        assertTrue(repository.isOnboardingComplete())
         assertTrue(settings.enabled)
         assertEquals(WalletMode.BUILT_IN, settings.walletMode)
         assertTrue(settings.sparkApiKey.orEmpty().isNotBlank())

@@ -29,7 +29,7 @@
 
         <activity
             android:name=".DebugRestoreActivity"
-            android:exported="true"
+            android:exported="false"
             android:label="Debug Restore"
             android:theme="@android:style/Theme.NoDisplay" />
         <activity

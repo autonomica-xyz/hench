@@ -17,6 +17,13 @@ data class NwcServerConnection(
 ) {
     val walletPubkeyHex: String = Bip340Schnorr.publicKey(walletSecretHex.hexToBytes()).toHex()
 
+    /**
+     * Public key of the paired client (derived from the URI `secret`). Only
+     * request events signed by this key may touch the wallet — see
+     * `NwcServerRuntime.isAuthorizedRequest`.
+     */
+    val clientPubkeyHex: String = Bip340Schnorr.publicKey(clientSecretHex.hexToBytes()).toHex()
+
     init {
         require(walletSecretHex.matches(HEX_32)) { "wallet secret must be 32-byte hex" }
         require(clientSecretHex.matches(HEX_32)) { "client secret must be 32-byte hex" }

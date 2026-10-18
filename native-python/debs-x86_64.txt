@@ -1,0 +1,24 @@
+# sha256-pinned termux-main debs for the Python 3.14.6 runtime graph
+# (same provenance/format as native-ffmpeg/debs-*.txt)
+ca-certificates	1:2026.09.25	pool/main/c/ca-certificates/ca-certificates_1:2026.09.25_all.deb	57fab24bf4561bfdd35afe71bc1929914e51c35458cfd1fca2b15e54bc8df7af
+gdbm	1.26-1	pool/main/g/gdbm/gdbm_1.26-1_x86_64.deb	af6c89b403d42a98898c665fc2c48da59a7d20e6e26f651a654790661844001f
+libandroid-execinfo	0.1-3	pool/main/liba/libandroid-execinfo/libandroid-execinfo_0.1-3_x86_64.deb	348582b47b4b6dec8c13147437d8bd93d029239bc95f30635074cad08efb6220
+libandroid-posix-semaphore	0.1-4	pool/main/liba/libandroid-posix-semaphore/libandroid-posix-semaphore_0.1-4_x86_64.deb	4bde3f8bc00fa59761544593f0606a05e4b449801f1c79038c42ce66988d0eb0
+libandroid-support	29-1	pool/main/liba/libandroid-support/libandroid-support_29-1_x86_64.deb	665900760c05959ec076082a0941f05bd452f301e5a70bdfa7383fd3404d44d5
+libbz2	1.0.8-8	pool/main/libb/libbz2/libbz2_1.0.8-8_x86_64.deb	f6f81d38a40c1626202da1e87727e5a3e6de296b1c0eb252af8948646b164ca0
+libc++	30	pool/main/libc/libc++/libc++_30_x86_64.deb	c9bcd9a8067a19c9c0e4893a72d314a2e37d6b67ce8dd05c67b9bbacad044b4f
+libcrypt	0.2-6	pool/main/libc/libcrypt/libcrypt_0.2-6_x86_64.deb	c424f96ce977cf2e8aa44925a852fd4c6c63564490a100cc44f63b71afd943e2
+libexpat	2.9.0	pool/main/libe/libexpat/libexpat_2.9.0_x86_64.deb	4af6fa2a319696055d9b317270f6f7b54170159340e776cec53ed1ba09770293
+libffi	3.8.0	pool/main/libf/libffi/libffi_3.8.0_x86_64.deb	59121ca4bc5f5735d7bb603bd99548983064e8fde97d236e97122cb87d3452a3
+libiconv	1.19	pool/main/libi/libiconv/libiconv_1.19_x86_64.deb	880e9f423b448316a4951ffca3ffcd626d79538042b60ce2c3a821b9650c594c
+liblzma	5.8.4	pool/main/libl/liblzma/liblzma_5.8.4_x86_64.deb	100ea7503a0b9ecffa45e1f168d035651f2eb7aedbebe71dd21fc0da4a84ef16
+libsqlite	3.54.1	pool/main/libs/libsqlite/libsqlite_3.54.1_x86_64.deb	b064739a8f4f1a67c55b3edc444688f9973a6c9ba5a1d2d4cc277e5eed08e375
+ncurses	6.6.20260307+really6.5.20250830	pool/main/n/ncurses/ncurses_6.6.20260307+really6.5.20250830_x86_64.deb	3f30f53c6a41c8450d146d4d42611a44be6ba0a8de1e8bb4dc903109a5fc3ff1
+ncurses-ui-libs	6.6.20260307+really6.5.20250830	pool/main/n/ncurses-ui-libs/ncurses-ui-libs_6.6.20260307+really6.5.20250830_x86_64.deb	1193618e18f579eb86064e00648d80648eaec5da70c0a5b944ac1315d209d16e
+openssl	1:3.6.5	pool/main/o/openssl/openssl_1:3.6.5_x86_64.deb	540f144592d23d35672976e175ede1b5d8cf464f153f646df5d4e6dcd8491a15
+python	3.14.6-1	pool/main/p/python/python_3.14.6-1_x86_64.deb	7fa420e055367c5c14a4cc18158046451aae16f5d82ba4d4a95ef90592f7e15f
+readline	8.3.6	pool/main/r/readline/readline_8.3.6_x86_64.deb	e9684798d13ede05f785315f68d3ff739563db2abef0e73db4dc9b8e17ded368
+zlib	1.3.2	pool/main/z/zlib/zlib_1.3.2_x86_64.deb	c61b089dd30981452f5953b2bad4c4e7857062b2abd971f87fb0aec441bc02f4
+zstd	1.5.7-1	pool/main/z/zstd/zstd_1.5.7-1_x86_64.deb	a76ba6c3d8742819bf4fff7780eb2e022269412700fc8f4471f530cc0d81833f
+termux-licenses	2.2	pool/main/t/termux-licenses/termux-licenses_2.2_all.deb	a3265cd1cf7d04754f2fb683eaf5b21918263792fd714457127900c1d6d9bcd9
+python-pycryptodomex	3.24.1	pool/main/p/python-pycryptodomex/python-pycryptodomex_3.24.1_x86_64.deb	b2957ad17079713353296040cc503cb8c58beb02f49c0d08e995e8095e985340

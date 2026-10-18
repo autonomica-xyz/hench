@@ -15,10 +15,11 @@ import net.nostr.hench.worker.JobRecord
 import net.nostr.hench.worker.PaymentSessionStoreI
 
 /**
- * The web_fetch MCP tool: load a URL in a real on-device browser (the user's
- * WebView cookies included, minus denied sensitive hosts) and return the page
- * as title + innerText for agent consumption. This is the phone's value: real
- * fingerprint, real sessions, residential IP.
+ * The web_fetch MCP tool: load a URL in a real on-device browser and return
+ * the page as title + innerText for agent consumption. This is the phone's
+ * value: real Chromium fingerprint and residential IP. Renders run in an
+ * isolated, unauthenticated WebView profile — operator login sessions are
+ * never exposed to a paying client.
  */
 class WebFetchTool(
     private val context: Context?,
@@ -29,7 +30,7 @@ class WebFetchTool(
 
     override val name: String = "web_fetch"
     override val description: String =
-        "Fetch a URL in a real mobile browser (Chrome WebView, real fingerprint and sessions) and return the page text for an agent. Handles Cloudflare/login walls better than datacenter fetchers."
+        "Fetch a URL in a real mobile browser (Chrome WebView, real fingerprint, unauthenticated session) and return the page text for an agent. Handles bot-checks better than datacenter fetchers."
     override val priceRangeSats: LongRange = priceSats..priceSats
     override fun quoteSats(args: JsonObject): Long = priceSats
 
@@ -87,10 +88,15 @@ class WebFetchTool(
             )
             ok
         }.getOrElse { e ->
-            if (e is kotlinx.coroutines.TimeoutCancellationException) {
-                ToolResult.errorJson("TIMEOUT", "page did not finish loading within ${timeoutSecs}s")
-            } else {
-                ToolResult.errorJson("DOWNLOAD", e.message ?: "page load failed")
+            when (e) {
+                is UrlPolicyRejected -> ToolResult.errorJson(e.code, e.message ?: "destination blocked")
+                is BrowserIsolationUnsupported ->
+                    ToolResult.errorJson("BROWSER_UNAVAILABLE", e.message ?: "WebView profile isolation unsupported")
+                is IllegalArgumentException -> ToolResult.errorJson("INVALID_PARAMS", e.message ?: "bad argument")
+                is kotlinx.coroutines.TimeoutCancellationException ->
+                    ToolResult.errorJson("TIMEOUT", "page did not finish loading within ${timeoutSecs}s")
+                is kotlinx.coroutines.CancellationException -> throw e
+                else -> ToolResult.errorJson("DOWNLOAD", e.message ?: "page load failed")
             }
         }
     }

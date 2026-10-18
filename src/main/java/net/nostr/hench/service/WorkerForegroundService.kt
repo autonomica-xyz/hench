@@ -40,6 +40,7 @@ import net.nostr.hench.worker.WorkerJobSnapshotStore
 class WorkerForegroundService : Service() {
     private var serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var cvmServer: CvmServer? = null
+    private var nwcServerRuntime: net.nostr.hench.nwc.NwcServerRuntime? = null
     private var cookieStore: CookieStore? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -142,8 +143,25 @@ class WorkerForegroundService : Service() {
             onJobUpdate = { update -> handleJobUpdate(update) },
         )
         cvmServer = server
-        // Reconcile persisted records for the consumer's own state; the CEP-8 gate
-        // is not bound at startup, so re-runs/replays are gate-driven once wired.
+        // NWC server: only when the user already created a connection in the
+        // Wallet screen (peek() is read-only — never mints secrets) and the
+        // built-in Spark wallet is the backend. Runs with the service so the
+        // URI keeps working with the app closed.
+        if (settings.walletMode == WalletMode.BUILT_IN) {
+            net.nostr.hench.nwc.NwcServerStore.peek(applicationContext, settings)?.let { connection ->
+                nwcServerRuntime = net.nostr.hench.nwc.NwcServerRuntime(
+                    connection = connection,
+                    wallet = SparkLightningWallet(
+                        net.nostr.hench.wallet.BreezSparkSdkClient(
+                            applicationContext,
+                            requireNotNull(settings.sparkApiKey),
+                            requireNotNull(settings.sparkSeedHex),
+                        ),
+                    ),
+                    ledger = net.nostr.hench.nwc.SharedPreferencesNwcRequestLedger(applicationContext),
+                )
+            }
+        }
         serviceScope.launch {
             // Fail closed: a worker whose download engine cannot initialize must not
             // start/announce the CVM server — it would accept paid calls that can
@@ -174,7 +192,9 @@ class WorkerForegroundService : Service() {
             runCatching { server.reconcile(wallet) }
                 .onFailure { Log.w(TAG, "reconcile failed: ${it.message}") }
             server.start()
-            Log.i(TAG, "hench started; wallet=${settings.walletMode}")
+            runCatching { nwcServerRuntime?.start() }
+                .onFailure { Log.w(TAG, "nwc server start failed: ${it.message}") }
+            Log.i(TAG, "hench started; wallet=${settings.walletMode}; nwc=${nwcServerRuntime != null}")
         }
     }
 
@@ -234,6 +254,8 @@ class WorkerForegroundService : Service() {
     private fun shutdownAll() {
         val server = cvmServer
         cvmServer = null
+        val nwc = nwcServerRuntime
+        nwcServerRuntime = null
         // Cancel the service scope (stops reconcile/start) and prepare a fresh
         // one so the next start has a usable scope.
         serviceScope.cancel()
@@ -250,6 +272,7 @@ class WorkerForegroundService : Service() {
                     .onFailure { Log.w(TAG, "server shutdown failed: ${it.message}") }
             }
         }
+        nwc?.shutdown()
     }
 
     private fun ensureNotificationChannel() {

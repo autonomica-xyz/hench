@@ -48,8 +48,19 @@ class PaymentGateHandler(
     private val paymentTtlCapSecs: ULong = 300UL,
     private val onJobUpdate: (JobUpdate) -> Unit = {},
     private val isExecutionInFlight: (String) -> Boolean = { false },
+    /**
+     * Hard bound on unpaid payment records admitted for new invoices. Unpaid
+     * requests otherwise mint invoices, persist records, and spawn wallet
+     * polls without limit (reviewer MEDIUM-1). Once reached, stale unpaid
+     * records are pruned (see [pruneUnpaid]) before rejecting.
+     */
+    private val maxUnpaidRecords: Int = 64,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    /** One settle poll per canonical id — dedupes poll ownership across
+     *  re-delivered gate events (the store dedupes invoices, not coroutines). */
+    private val activePolls = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
     /**
      * Handle a single gate event. Returns once the invoice has been submitted
@@ -76,7 +87,20 @@ class PaymentGateHandler(
             return null
         }
 
-        val existing = store.getPayment(event.canonicalInvocationId)
+        // FAILED is an unpaid terminal state, but a record can reach FAILED
+        // from a poll timeout just as the payer paid. Wallet-verify once here
+        // so a settled invoice never mints a second charge for the same
+        // canonical id; a confirmed-settled record goes through the normal
+        // rebind path below.
+        var existing = store.getPayment(event.canonicalInvocationId)
+        if (existing?.status == PaymentRecord.STATUS_FAILED) {
+            val key = existing.paymentId ?: existing.payReq
+            if (runCatching { wallet.lookupInvoice(key) }.getOrNull() == InvoiceStatus.Settled) {
+                existing = existing.copy(status = PaymentRecord.STATUS_SETTLED)
+                store.putPayment(existing)
+                logw("healed FAILED->SETTLED for ${event.canonicalInvocationId}; payment settled out of band")
+            }
+        }
         when {
             existing != null && existing.status == PaymentRecord.STATUS_PENDING -> {
                 onJobUpdate(JobUpdate(event.canonicalInvocationId, JobStatus.WAITING_FOR_PAYMENT, amountMsat = existing.amountSats * 1_000L, detail = existing.payReq))
@@ -130,6 +154,30 @@ class PaymentGateHandler(
         val toolName = params?.get("name")?.let { (it as? JsonPrimitive)?.content }
         val tool = toolName?.let { registry.get(it) }
         val args = params?.get("arguments")?.let { runCatching { it.jsonObject }.getOrNull() }
+
+        // Admission bound BEFORE the wallet creates an invoice: unpaid
+        // requests mint invoices, persist records and spawn polls; cap them.
+        // First prune records the wallet proves are dead, then reject.
+        val unpaid = store.allPayments().count {
+            it.status == PaymentRecord.STATUS_PENDING || it.status == PaymentRecord.STATUS_FAILED
+        }
+        if (unpaid >= maxUnpaidRecords) {
+            pruneUnpaid()
+            val stillUnpaid = store.allPayments().count {
+                it.status == PaymentRecord.STATUS_PENDING || it.status == PaymentRecord.STATUS_FAILED
+            }
+            if (stillUnpaid >= maxUnpaidRecords) {
+                logw("unpaid admission bound ($maxUnpaidRecords) reached; rejecting ${event.canonicalInvocationId}")
+                onJobUpdate(
+                    JobUpdate(
+                        event.canonicalInvocationId,
+                        JobStatus.FAILED,
+                        detail = "worker busy: too many unpaid invoices",
+                    ),
+                )
+                return null
+            }
+        }
         if (tool == null || tool.priceRangeSats == null || args == null) {
             logw("no priced tool '${toolName}' for ${event.canonicalInvocationId}")
             onJobUpdate(JobUpdate(event.canonicalInvocationId, JobStatus.FAILED, detail = "unknown or unpriced tool"))
@@ -148,7 +196,19 @@ class PaymentGateHandler(
             return null
         }
 
+        // quoteSats is bounded by the advertised range, but a tool may declare
+        // a huge range.last — fail closed instead of overflowing msat math.
+        if (quoteSats > Long.MAX_VALUE / 1_000L) {
+            logw("quote $quoteSats sats overflows msat for ${event.canonicalInvocationId}")
+            onJobUpdate(JobUpdate(event.canonicalInvocationId, JobStatus.FAILED, detail = "quote out of range"))
+            return null
+        }
         val invoice = wallet.createInvoice(quoteSats * 1_000L, "${tool.name} ${event.canonicalInvocationId.take(8)}")
+        if (invoice.amountMsat > Long.MAX_VALUE - 999L) {
+            logw("invoice amountMsat ${invoice.amountMsat} overflows sats for ${event.canonicalInvocationId}")
+            onJobUpdate(JobUpdate(event.canonicalInvocationId, JobStatus.FAILED, detail = "invoice amount out of range"))
+            return null
+        }
         val submittedSats = (invoice.amountMsat + 999L) / 1_000L
         if (submittedSats < range.first || submittedSats > range.last) {
             logw("invoice amount $submittedSats sats outside advertised cap [$range.first, ${range.last}]")
@@ -200,7 +260,17 @@ class PaymentGateHandler(
 
 
     private fun launchSettlePoll(scope: CoroutineScope, payment: PaymentRecord): kotlinx.coroutines.Job {
-        return scope.launch { settlePoll(payment) }
+        activePolls[payment.canonicalInvocationId]?.let { existing ->
+            if (existing.isActive) return existing // one poll per canonical id
+        }
+        val job = scope.launch { settlePoll(payment) }
+        job.invokeOnCompletion { activePolls.remove(payment.canonicalInvocationId, job) }
+        val raced = activePolls.putIfAbsent(payment.canonicalInvocationId, job)
+        if (raced != null && raced.isActive) {
+            job.cancel() // another handle() won the claim
+            return raced
+        }
+        return job
     }
 
     private suspend fun settlePoll(payment: PaymentRecord) {
@@ -254,17 +324,69 @@ class PaymentGateHandler(
                         InvoiceStatus.Pending -> {
                             // Not paid yet — keep polling (see comment above).
                         }
-                        InvoiceStatus.Pending -> {
-                            // fall through to delay
-                        }
                     }
                     delay(POLL_INTERVAL_MS)
                 }
             }
-        } catch (_: TimeoutCancellationException) {
+        } catch (tce: TimeoutCancellationException) {
+            if (!coroutineContext.isActive) throw tce // real cancellation, not the deadline
+            // The poll gave up, but the payer may have paid just before the
+            // TTL. One last wallet check before writing the FAILED record —
+            // a settled invoice must keep its replay protection (and money).
+            val final = try {
+                withTimeout(LOOKUP_TIMEOUT_MS) { wallet.lookupInvoice(paymentId) }
+            } catch (_: Throwable) {
+                null
+            }
+            if (final == InvoiceStatus.Settled) {
+                // Keep the record SETTLED so a replay re-binds instead of
+                // minting a new invoice, even if the gate mark fails again.
+                store.putPayment(payment.copy(status = PaymentRecord.STATUS_SETTLED))
+                if (markSettledWithRetry(payment.payReq, null)) {
+                    onJobUpdate(JobUpdate(payment.canonicalInvocationId, JobStatus.PROCESSING, amountMsat = payment.amountSats * 1_000L, detail = "payment settled"))
+                } else {
+                    onJobUpdate(JobUpdate(payment.canonicalInvocationId, JobStatus.FAILED, amountMsat = payment.amountSats * 1_000L, detail = "payment settled at deadline, gate confirmation failed"))
+                }
+                return@settlePoll
+            }
             markFailedWithRetry(payment.payReq, "payment timed out")
             store.putPayment(payment.copy(status = PaymentRecord.STATUS_FAILED))
             onJobUpdate(JobUpdate(payment.canonicalInvocationId, JobStatus.FAILED, detail = "payment timed out"))
+        }
+    }
+
+    /**
+     * Expire unpaid records safely. A record is only removed once the wallet
+     * has confirmed it is NOT settled — deleting a settled/dispatched record
+     * would erase replay protection for money already received. Records the
+     * wallet reports settled heal to SETTLED and stay.
+     */
+    private suspend fun pruneUnpaid() {
+        val now = System.currentTimeMillis()
+        for (record in store.allPayments()) {
+            val unpaid = record.status == PaymentRecord.STATUS_PENDING || record.status == PaymentRecord.STATUS_FAILED
+            if (!unpaid) continue
+            val ttlMs = (record.ttlSecs.takeIf { it > 0 } ?: paymentTtlCapSecs.toLong()) * 1_000L
+            val expired = now - record.submittedAt > ttlMs + PRUNE_GRACE_MS
+            if (record.status == PaymentRecord.STATUS_PENDING && !expired) continue
+            if (record.status == PaymentRecord.STATUS_FAILED &&
+                now - record.submittedAt < FAILED_RETENTION_MS
+            ) continue
+            val key = record.paymentId ?: record.payReq
+            val walletStatus = runCatching { wallet.lookupInvoice(key) }.getOrNull()
+            when (walletStatus) {
+                InvoiceStatus.Settled -> {
+                    // Money arrived for a record we had counted as dead —
+                    // heal it so a replay re-binds instead of re-billing.
+                    store.putPayment(record.copy(status = PaymentRecord.STATUS_SETTLED))
+                    logw("prune healed ${record.canonicalInvocationId}: wallet reports settled")
+                }
+                InvoiceStatus.Pending -> Unit // still payable: never drop a live invoice
+                else -> {
+                    // Expired/Unknown/null: no funds attached, safe to expire.
+                    store.removePayment(record.canonicalInvocationId)
+                }
+            }
         }
     }
 
@@ -319,5 +441,10 @@ class PaymentGateHandler(
         private const val TAG = "PaymentGateHandler"
         private const val POLL_INTERVAL_MS = 2_000L
         private const val LOOKUP_TIMEOUT_MS = 10_000L
+        /** Extra time past invoice TTL before a stale PENDING record may be expired. */
+        private const val PRUNE_GRACE_MS = 60_000L
+        /** FAILED unpaid records are kept this long for replay/diagnostics before
+         *  a wallet-verified prune may remove them. */
+        private const val FAILED_RETENTION_MS = 24L * 60 * 60 * 1_000L
     }
 }

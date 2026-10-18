@@ -65,7 +65,7 @@ class YtdlpBlossomJobExecutor(
                 // Only enabled when curl_cffi is importable (requires native .so that can load).
                 // Falls back gracefully — most platforms work for public content without it.
                 request.platform?.impersonateTarget?.let { target ->
-                    if (PythonPackageManager.isCurlCffiImportable(context.applicationContext)) {
+                    if (PythonPackageManager.isCurlCffiInstalled(context.applicationContext)) {
                         ytdlRequest.addOption("--impersonate", target)
                         Log.d(TAG, "using impersonate=$target for ${request.platform}")
                     } else {
@@ -80,7 +80,21 @@ class YtdlpBlossomJobExecutor(
 
                 when (request.mode) {
                     DeliveryMode.AUDIO_ONLY -> ytdlRequest.addOption("-x").addOption("--audio-format", "mp3")
-                    DeliveryMode.FULL -> ytdlRequest.addOption("--format", "best[ext=mp4]/best")
+                    // Modern YouTube serves adaptive-only streams; merged
+                    // bestvideo+bestaudio via bundled ffmpeg is the reliable
+                    // path (verified on-device: bare best[ext=mp4]/best fails).
+                    DeliveryMode.FULL -> ytdlRequest.addOption(
+                        "--format",
+                        "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+                    )
+                }
+
+                // YouTube signature/throttling requires a JS runtime for EJS
+                // scripts; the AAR ships a QuickJS binary as libqjs.so.
+                File(context.applicationInfo.nativeLibraryDir, "libqjs.so").let { qjs ->
+                    if (qjs.exists()) {
+                        ytdlRequest.addOption("--js-runtimes", "quickjs:${qjs.absolutePath}")
+                    }
                 }
 
                 onProgress(JobExecutionProgress(request.id, "DOWNLOADING", "Downloading media"))

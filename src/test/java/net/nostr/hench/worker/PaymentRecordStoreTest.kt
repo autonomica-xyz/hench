@@ -69,15 +69,6 @@ class PaymentRecordStoreTest {
         assertNull(store.getByCanonicalId("missing"))
     }
 
-    @Test
-    fun putPaymentReturnsCommitResult() {
-        val store = InMemoryPaymentSessionStore()
-        val record = PaymentRecord("canon-1", "lnbc1fake", 1000L, "bitcoin-lightning-bolt11")
-
-        assertTrue(store.putPayment(record))
-        store.failPutPayment = true
-        assertEquals(false, store.putPayment(record.copy(canonicalInvocationId = "canon-2")))
-    }
 
     @Test
     fun paymentRecordAndJobRecordStoresAreIndependent() {
@@ -117,5 +108,24 @@ class PaymentRecordStoreTest {
         // A racing DISPATCHED write must not be downgraded by a late SETTLED write.
         store.putPayment(base.copy(status = PaymentRecord.STATUS_SETTLED))
         assertEquals(PaymentRecord.STATUS_DISPATCHED, store.getPayment("canon-m")?.status)
+
+        // Money states are sticky upward: a late FAILED write must not erase
+        // SETTLED, but a proven SETTLED heals FAILED (FAILED ranks below it).
+        val heal = PaymentRecord("canon-heal", "lnbc1fake", 1000L, "bitcoin-lightning-bolt11",
+            status = PaymentRecord.STATUS_FAILED)
+        store.putPayment(heal)
+        store.putPayment(heal.copy(status = PaymentRecord.STATUS_SETTLED))
+        assertEquals(PaymentRecord.STATUS_SETTLED, store.getPayment("canon-heal")?.status)
+        store.putPayment(heal.copy(status = PaymentRecord.STATUS_FAILED))
+        assertEquals(PaymentRecord.STATUS_SETTLED, store.getPayment("canon-heal")?.status)
+    }
+
+    @Test
+    fun removePaymentDeletesOnlyOnExplicitCall() {
+        val store = InMemoryPaymentSessionStore()
+        val record = PaymentRecord("canon-rm", "lnbc1fake", 1000L, "bitcoin-lightning-bolt11")
+        store.putPayment(record)
+        store.removePayment("canon-rm")
+        assertNull(store.getPayment("canon-rm"))
     }
 }

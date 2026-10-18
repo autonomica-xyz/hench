@@ -42,6 +42,26 @@ object Bip340Schnorr {
         return rx + bytes((k + e * d).mod(n))
     }
 
+    /**
+     * BIP-340 verification of `sig` (r‖s, 64 bytes) over `message32` for the
+     * x-only `pubkey`. Returns false on any malformed input — never throws —
+     * so it is safe to run on untrusted wire data.
+     */
+    fun verify(message32: ByteArray, pubkey: ByteArray, sig: ByteArray): Boolean = runCatching {
+        require(message32.size == 32 && pubkey.size == 32 && sig.size == 64) { "bad input sizes" }
+        val pPoint = liftX(int(pubkey))
+        val r = int(sig.copyOfRange(0, 32))
+        val s = int(sig.copyOfRange(32, 64))
+        require(r < p && s < n) { "signature scalar out of range" }
+        val e = int(taggedHash("BIP0340/challenge", sig.copyOfRange(0, 32) + pubkey + message32)).mod(n)
+        // r1 = s*G - e*P; must be a finite point with even y and x == r.
+        val r1 = scalarMultiply(s, g).toJacobian()
+            .add(scalarMultiply(e, pPoint.negate()).toJacobian())
+        if (r1.isInfinity) return@runCatching false
+        val r1Affine = r1.toAffine()
+        r1Affine.x == r && !r1Affine.y.testBit(0)
+    }.getOrDefault(false)
+
     private data class Point(val x: BigInteger, val y: BigInteger)
     private data class JacobianPoint(val x: BigInteger, val y: BigInteger, val z: BigInteger) {
         val isInfinity: Boolean get() = z == BigInteger.ZERO
@@ -68,6 +88,7 @@ object Bip340Schnorr {
         return result.toAffine()
     }
 
+    private fun Point.negate(): Point = Point(x, (p - y).mod(p))
     private fun Point.toJacobian(): JacobianPoint = JacobianPoint(x, y, BigInteger.ONE)
 
     private fun JacobianPoint.toAffine(): Point {

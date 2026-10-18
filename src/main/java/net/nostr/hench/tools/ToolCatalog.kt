@@ -10,7 +10,7 @@ object ToolCatalog {
 
     val all: List<Entry> = listOf(
         Entry("download_media", "Media download (yt-dlp)", "Download audio/video from YouTube & other platforms"),
-        Entry("web_fetch", "Web fetch", "Fetch pages in a real mobile browser with your sessions"),
+        Entry("web_fetch", "Web fetch", "Fetch pages in a real mobile browser (isolated, unauthenticated session)"),
         Entry("page_screenshot", "Page screenshot", "Render pages and return a screenshot PNG"),
     )
 }

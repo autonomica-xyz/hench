@@ -1,0 +1,961 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index ca53fb1..c83b5c8 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -159,7 +159,7 @@ arithmetic_side_effects = "warn"
+ 
+ [workspace.dependencies]
+ aes = "0.8.4"
+-anyhow = "1.0.98"
++anyhow = "1.0.104"
+ async-trait = "0.1.88"
+ base64 = "0.22.1"
+ bech32 = "0.11.0"
+@@ -169,7 +169,7 @@ bitflags = "2.10.0"
+ boltz-client = { git = "https://github.com/breez/boltz-client", rev = "aea35af1628d1fb259ebf85266f96215cfdabcb5" }
+ breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
+ breez-sdk-spark = { path = "crates/breez-sdk/core" }
+-built = { version = "0.8.0", features = ["git2"] }
++built = { version = "0.8.1", features = ["git2"] }
+ bytes = "1.10.1"
+ cargo_metadata = "0.18"
+ cbc = "0.1.2"
+@@ -202,8 +202,8 @@ lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
+ log = "0.4.29"
+ macros = { path = "crates/macros" }
+ mime = "0.3.17"
+-nostr = { version = "0.43.1", default-features = false, features = ["std"] }
+-nostr-sdk = { version = "0.43.0", default-features = false }
++nostr = { version = "0.45.5", default-features = false, features = ["std", "os-rng"] }
++nostr-sdk = { version = "0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
+ platform-utils = { path = "crates/platform-utils" }
+ utils = { path = "crates/utils" }
+ proc-macro2 = "1.0.97"
+@@ -220,7 +220,7 @@ rstest_reuse = "0.7.0"
+ # We want to match the rusqlite version used by ldk-node and the rest of the ecosystem
+ rusqlite = { version = "0.32.1", features = ["backup", "bundled"] }
+ rusqlite_migration = { version = "1.3.1" }
+-rustls = { version = "0.23.37", default-features = false, features = ["ring"] }
++rustls = { version = "0.23.46", default-features = false, features = ["ring"] }
+ rustyline = "16.0.0"
+ serde = "1.0.219"
+ serde_bytes = "0.11"
+@@ -244,7 +244,7 @@ thiserror = "2.0.12"
+ tokio = { version = "1.45.1", default-features = false }
+ tokio-postgres = { version = "0.7.10", features = ["with-serde_json-1", "with-chrono-0_4"] }
+ tokio-postgres-rustls = "0.13"
+-mysql_async = { version = "0.36", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
++mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
+ deadpool-postgres = "0.14"
+ deadpool = "0.13"
+ tokio-test = "0.4.4"
+diff --git a/crates/breez-sdk/breez-itest/tests/lnurl.rs b/crates/breez-sdk/breez-itest/tests/lnurl.rs
+index f3d0d2e..dcba5f2 100644
+--- a/crates/breez-sdk/breez-itest/tests/lnurl.rs
++++ b/crates/breez-sdk/breez-itest/tests/lnurl.rs
+@@ -1722,18 +1722,18 @@ async fn user_nostr_pubkey(lnurl: &LnurlFixture, username: &str) -> Result<Strin
+ 
+ /// A zap request carrying the tags the server requires: exactly one recipient
+ /// and somewhere to publish the receipt.
+-fn signed_zap_request(recipient: nostr::PublicKey) -> Result<nostr::Event> {
+-    use nostr::{EventBuilder, Keys, Kind, Tag, TagStandard};
++fn signed_zap_request(recipient: nostr::key::PublicKey) -> Result<nostr::event::Event> {
++    use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tag};
++    use nostr::key::Keys;
++    use nostr::nips::nip57::Nip57Tag;
+ 
+     let tags = vec![
+         Tag::public_key(recipient),
+-        Tag::from_standardized_without_cell(TagStandard::Relays(vec![
+-            "wss://relay.example".parse()?,
+-        ])),
++        Nip57Tag::Relays(vec!["wss://relay.example".parse()?]).into(),
+     ];
+     Ok(EventBuilder::new(Kind::ZapRequest, "")
+         .tags(tags)
+-        .sign_with_keys(&Keys::generate())?)
++        .finalize(&Keys::generate())?)
+ }
+ 
+ /// Ask for an invoice quoting `zap_request`, returning the response body
+@@ -1742,10 +1742,8 @@ async fn request_zap_invoice(
+     lnurl: &LnurlFixture,
+     username: &str,
+     amount_msat: u64,
+-    zap_request: &nostr::Event,
++    zap_request: &nostr::event::Event,
+ ) -> Result<(u16, serde_json::Value)> {
+-    use nostr::JsonUtil;
+-
+     let mut url = reqwest::Url::parse(&format!("{}/lnurlp/{username}/invoice", lnurl.http_url()))?;
+     url.query_pairs_mut()
+         .append_pair("amount", &amount_msat.to_string())
+@@ -1821,7 +1819,7 @@ async fn test_18_a_zap_request_can_be_requoted() -> Result<()> {
+         .await?;
+ 
+     let lnurl = Arc::clone(bob.lnurl_fixture.as_ref().unwrap());
+-    let zap_request = signed_zap_request(nostr::Keys::generate().public_key)?;
++    let zap_request = signed_zap_request(nostr::key::Keys::generate().public_key())?;
+ 
+     let (status, first) = request_zap_invoice(&lnurl, username, amount_msat, &zap_request).await?;
+     assert_eq!(status, 200, "a valid zap request was rejected: {first}");
+@@ -1880,7 +1878,7 @@ async fn test_19_a_zap_request_quoted_on_another_address_cannot_validate() -> Re
+ 
+     // A request naming the recipient's nostr identity, as one copied from a
+     // relay would.
+-    let recipient_identity = nostr::Keys::generate().public_key;
++    let recipient_identity = nostr::key::Keys::generate().public_key();
+     let zap_request = signed_zap_request(recipient_identity)?;
+ 
+     let (status, body) = request_zap_invoice(&lnurl, "zapother", 5_000_000, &zap_request).await?;
+diff --git a/crates/breez-sdk/core/src/passkey/derivation.rs b/crates/breez-sdk/core/src/passkey/derivation.rs
+index 32fb5a2..a8eba5d 100644
+--- a/crates/breez-sdk/core/src/passkey/derivation.rs
++++ b/crates/breez-sdk/core/src/passkey/derivation.rs
+@@ -28,9 +28,9 @@ const NOSTR_SALT_DERIVATION_PATH: &str = "m/44'/1237'/55'/0/0";
+ /// * `account_master` - The 32-byte PRF output from the magic salt
+ ///
+ /// # Returns
+-/// * `Ok(nostr::Keys)` - The Nostr keypair for signing salt events
++/// * `Ok(nostr::key::Keys)` - The Nostr keypair for signing salt events
+ /// * `Err(PasskeyError)` - If derivation fails
+-pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::Keys, PasskeyError> {
++pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::key::Keys, PasskeyError> {
+     if account_master.len() != 32 {
+         return Err(PasskeyError::InvalidPrfOutput(format!(
+             "Account master must be 32 bytes, got {}",
+@@ -51,10 +51,10 @@ pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::Keys, Passke
+     let derived = master.derive_priv(&secp, &path)?;
+ 
+     // Convert to nostr secret key
+-    let secret_key = nostr::SecretKey::from_slice(&derived.private_key.secret_bytes())
++    let secret_key = nostr::key::SecretKey::from_slice(&derived.private_key.secret_bytes())
+         .map_err(|e| PasskeyError::KeyDerivationError(e.to_string()))?;
+ 
+-    Ok(nostr::Keys::new(secret_key))
++    Ok(nostr::key::Keys::new(secret_key))
+ }
+ 
+ /// Derives a Nostr keypair for NIP-42 authentication from a Breez API key.
+@@ -66,9 +66,9 @@ pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::Keys, Passke
+ /// * `api_key` - The Breez API key (base64 encoded)
+ ///
+ /// # Returns
+-/// * `Ok(nostr::Keys)` - The Nostr keypair for NIP-42 authentication
++/// * `Ok(nostr::key::Keys)` - The Nostr keypair for NIP-42 authentication
+ /// * `Err(PasskeyError)` - If the API key is invalid base64 or derivation fails
+-pub fn derive_nip42_keypair(api_key: &str) -> Result<nostr::Keys, PasskeyError> {
++pub fn derive_nip42_keypair(api_key: &str) -> Result<nostr::key::Keys, PasskeyError> {
+     // 1. Base64 decode the API key
+     let decoded = STANDARD
+         .decode(api_key)
+@@ -78,10 +78,10 @@ pub fn derive_nip42_keypair(api_key: &str) -> Result<nostr::Keys, PasskeyError>
+     let hash = sha256::Hash::hash(&decoded);
+ 
+     // 3. Create Nostr keypair from hash
+-    let secret_key = nostr::SecretKey::from_slice(hash.as_byte_array())
++    let secret_key = nostr::key::SecretKey::from_slice(hash.as_byte_array())
+         .map_err(|e| PasskeyError::KeyDerivationError(e.to_string()))?;
+ 
+-    Ok(nostr::Keys::new(secret_key))
++    Ok(nostr::key::Keys::new(secret_key))
+ }
+ 
+ /// Converts PRF output to a BIP39 mnemonic.
+diff --git a/crates/breez-sdk/core/src/passkey/mod.rs b/crates/breez-sdk/core/src/passkey/mod.rs
+index bbf2a09..35c5a56 100644
+--- a/crates/breez-sdk/core/src/passkey/mod.rs
++++ b/crates/breez-sdk/core/src/passkey/mod.rs
+@@ -80,7 +80,7 @@ use nostr_client::{LabelStore, NostrSaltClient};
+ /// network-backed [`NostrSaltClient`]; tests inject an in-memory double so
+ /// unit tests never reach the relays.
+ type LabelStoreBuilder =
+-    Arc<dyn Fn(nostr::Keys, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
++    Arc<dyn Fn(nostr::key::Keys, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
+ 
+ /// Default store builder: a network-backed [`NostrSaltClient`] reaching the
+ /// relays through `proxy`, when one is configured.
+@@ -183,7 +183,7 @@ impl Passkey {
+     /// cache the runtime path goes through; production code reads via
+     /// [`Self::nostr_client`].
+     #[cfg(test)]
+-    async fn derive_keys(&self) -> Result<nostr::Keys, PasskeyError> {
++    async fn derive_keys(&self) -> Result<nostr::key::Keys, PasskeyError> {
+         let client = self.nostr_client().await?;
+         Ok(client.signing_keys())
+     }
+diff --git a/crates/breez-sdk/core/src/passkey/nostr_client.rs b/crates/breez-sdk/core/src/passkey/nostr_client.rs
+index 77d11ce..619aae8 100644
+--- a/crates/breez-sdk/core/src/passkey/nostr_client.rs
++++ b/crates/breez-sdk/core/src/passkey/nostr_client.rs
+@@ -3,13 +3,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::{Arc, OnceLock};
+ use std::time::Duration;
+ 
++use nostr::event::{Event, EventBuilder, FinalizeEvent, IntoEventBuilder, Kind};
++use nostr::filter::Filter;
++use nostr::key::{Keys, PublicKey};
+ use nostr::nips::nip65;
+-use nostr::{Event, Filter, Kind, PublicKey, RelayUrl};
+-use nostr_sdk::Client;
++use nostr::types::RelayUrl;
++use nostr_sdk::client::Client;
++use nostr_sdk::prelude::SignerAuthenticator;
+ #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+-use nostr_sdk::ClientOptions;
+-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+-use nostr_sdk::client::Connection;
++use nostr_sdk::prelude::Proxy;
+ use platform_utils::tokio;
+ use tracing::{info, warn};
+ 
+@@ -68,7 +70,7 @@ const BREEZ_RELAY: &str = "wss://nr1.breez.technology";
+ const BREEZ_NIP65_PUBKEY: &str = "0478caf9d25260b7603154c4227d4af5c2e4937092fbdbc9958aef9ea8856e23";
+ 
+ /// Sole concrete, internal label store for the passkey orchestrator.
+-/// Owns the full `nostr::Keys` derived from the passkey's account-master
++/// Owns the full `nostr::key::Keys` derived from the passkey's account-master
+ /// PRF output plus the optional Breez API key used to authenticate with
+ /// the Breez relay (NIP-42).
+ ///
+@@ -79,7 +81,7 @@ const BREEZ_NIP65_PUBKEY: &str = "0478caf9d25260b7603154c4227d4af5c2e4937092fbdb
+ /// - Breez relay is added when an API key is configured (enables NIP-42 auth)
+ #[derive(Clone)]
+ pub struct NostrSaltClient {
+-    keys: nostr::Keys,
++    keys: Keys,
+     breez_api_key: Option<String>,
+     /// SOCKS5 proxy carrying every relay connection, when configured.
+     proxy: Option<crate::ProxyConfig>,
+@@ -95,7 +97,7 @@ impl NostrSaltClient {
+     ///
+     /// `proxy` routes every relay connection through a SOCKS5 proxy.
+     pub fn new(
+-        keys: nostr::Keys,
++        keys: Keys,
+         breez_api_key: Option<String>,
+         proxy: Option<crate::ProxyConfig>,
+     ) -> Self {
+@@ -118,7 +120,7 @@ impl NostrSaltClient {
+     pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
+         let filter = Filter::new()
+             .author(self.keys.public_key())
+-            .kind(nostr::Kind::TextNote);
++            .kind(Kind::TextNote);
+ 
+         let events_vec = self.read_events(filter).await?;
+ 
+@@ -148,12 +150,12 @@ impl NostrSaltClient {
+         let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
+         let filter = Filter::new()
+             .author(self.keys.public_key())
+-            .kind(nostr::Kind::TextNote);
++            .kind(Kind::TextNote);
+ 
+         // Sign once and broadcast the same event to every batch missing the
+         // label, so all relays converge on a single event id.
+-        let event = nostr::EventBuilder::text_note(label)
+-            .sign_with_keys(&self.keys)
++        let event = EventBuilder::new(Kind::TextNote, label)
++            .finalize(&self.keys)
+             .map_err(|e| PasskeyError::NostrWriteFailed(format!("Failed to sign event: {e}")))?;
+ 
+         let mut last_err: Option<String> = None;
+@@ -178,7 +180,7 @@ impl NostrSaltClient {
+             }
+             client.connect().await;
+ 
+-            let events = match client.fetch_events(filter.clone(), timeout).await {
++            let events = match client.fetch_events(filter.clone()).timeout(timeout).await {
+                 Ok(events) => events,
+                 Err(e) => {
+                     client.disconnect().await;
+@@ -388,7 +390,7 @@ impl NostrSaltClient {
+             .filter_map(|url| RelayUrl::parse(url).ok().map(|r| (r, None)))
+             .collect();
+ 
+-        let builder = nostr::EventBuilder::relay_list(relay_entries);
++        let builder = nip65::RelayList::new(relay_entries).into_event_builder();
+         self.write_event(builder).await
+     }
+ 
+@@ -407,11 +409,11 @@ impl NostrSaltClient {
+     }
+ 
+     /// Sign and publish an event to write relays.
+-    async fn write_event(&self, builder: nostr::EventBuilder) -> Result<(), PasskeyError> {
++    async fn write_event(&self, builder: EventBuilder) -> Result<(), PasskeyError> {
+         let client = self.create_write_client().await?;
+ 
+         let event = builder
+-            .sign_with_keys(&self.keys)
++            .finalize(&self.keys)
+             .map_err(|e| PasskeyError::NostrWriteFailed(format!("Failed to sign event: {e}")))?;
+ 
+         client
+@@ -463,7 +465,7 @@ impl NostrSaltClient {
+ 
+             client.connect().await;
+ 
+-            match client.fetch_events(filter.clone(), timeout).await {
++            match client.fetch_events(filter.clone()).timeout(timeout).await {
+                 Ok(events) => {
+                     client.disconnect().await;
+                     return Ok(events.into_iter().collect());
+@@ -517,7 +519,7 @@ impl NostrSaltClient {
+     ///
+     /// When an API key is configured, uses API key-derived keys for NIP-42
+     /// authentication. Content events are signed manually with the owned
+-    /// passkey-derived keys via `sign_with_keys()`.
++    /// passkey-derived keys via `finalize()`.
+     // Only the native proxy path awaits, so on WASM this is async purely to
+     // keep one signature across targets.
+     #[cfg_attr(
+@@ -525,17 +527,18 @@ impl NostrSaltClient {
+         allow(clippy::unused_async)
+     )]
+     async fn new_client(&self) -> Result<Client, PasskeyError> {
+-        let mut builder = Client::builder();
+-        builder = if let Some(ref api_key) = self.breez_api_key {
+-            builder.signer(derive_nip42_keypair(api_key)?)
++        let auth_keys = if let Some(api_key) = &self.breez_api_key {
++            derive_nip42_keypair(api_key)?
+         } else {
+-            builder.signer(self.keys.clone())
++            self.keys.clone()
+         };
++        let mut builder =
++            Client::builder().authenticator(SignerAuthenticator::new(auth_keys));
+ 
+         #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+         if let Some(proxy) = &self.proxy {
+             let addr = resolve_proxy_addr(proxy).await?;
+-            builder = builder.opts(ClientOptions::new().connection(Connection::new().proxy(addr)));
++            builder = builder.proxy(Proxy::all(addr));
+         }
+         // Relay connections run on browser WebSockets here, which cannot be
+         // proxied. Refuse rather than connect directly behind the caller's back.
+@@ -567,7 +570,7 @@ pub(crate) trait LabelStore: Send + Sync {
+     /// The signing identity backing this store. Lets the orchestrator
+     /// verify deterministic key derivation across the lazy-init boundary.
+     #[cfg(test)]
+-    fn signing_keys(&self) -> nostr::Keys;
++    fn signing_keys(&self) -> Keys;
+ }
+ 
+ #[macros::async_trait]
+@@ -581,7 +584,7 @@ impl LabelStore for NostrSaltClient {
+     }
+ 
+     #[cfg(test)]
+-    fn signing_keys(&self) -> nostr::Keys {
++    fn signing_keys(&self) -> Keys {
+         self.keys.clone()
+     }
+ }
+@@ -593,8 +596,8 @@ mod tests {
+     #[cfg(feature = "browser-tests")]
+     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+ 
+-    fn test_keys() -> nostr::Keys {
+-        nostr::Keys::generate()
++    fn test_keys() -> Keys {
++        Keys::generate()
+     }
+ 
+     #[macros::test_all]
+diff --git a/crates/breez-sdk/core/src/passkey/passkey_client.rs b/crates/breez-sdk/core/src/passkey/passkey_client.rs
+index 25e03ee..ed6f3f2 100644
+--- a/crates/breez-sdk/core/src/passkey/passkey_client.rs
++++ b/crates/breez-sdk/core/src/passkey/passkey_client.rs
+@@ -646,7 +646,7 @@ mod tests {
+     /// relays. Records every call into a shared [`StoreCalls`] so tests can
+     /// assert the publish / query contract, not just that nothing panicked.
+     struct MockLabelStore {
+-        keys: nostr::Keys,
++        keys: nostr::key::Keys,
+         calls: Arc<Mutex<StoreCalls>>,
+     }
+ 
+@@ -666,7 +666,7 @@ mod tests {
+             Ok(Vec::new())
+         }
+ 
+-        fn signing_keys(&self) -> nostr::Keys {
++        fn signing_keys(&self) -> nostr::key::Keys {
+             self.keys.clone()
+         }
+     }
+diff --git a/crates/breez-sdk/lnurl/Cargo.toml b/crates/breez-sdk/lnurl/Cargo.toml
+index 8c635b4..bde1288 100644
+--- a/crates/breez-sdk/lnurl/Cargo.toml
++++ b/crates/breez-sdk/lnurl/Cargo.toml
+@@ -14,8 +14,8 @@ figment = { workspace = true, features = ["env", "toml"] }
+ hex.workspace = true
+ lightning-invoice = { workspace = true, features = ["std"] }
+ lnurl-models.workspace = true
+-nostr = { workspace = true, features = ["nip57"] }
+-nostr-sdk = { workspace = true, features = ["nip57"] }
++nostr.workspace = true
++nostr-sdk.workspace = true
+ platform-utils.workspace = true
+ rand.workspace = true
+ reqwest.workspace = true
+diff --git a/crates/breez-sdk/lnurl/src/main.rs b/crates/breez-sdk/lnurl/src/main.rs
+index 1f4d922..20567e3 100644
+--- a/crates/breez-sdk/lnurl/src/main.rs
++++ b/crates/breez-sdk/lnurl/src/main.rs
+@@ -418,7 +418,7 @@ where
+     let nostr_keys = args
+         .nsec
+         .map(|nsec| {
+-            let keys = nostr::Keys::from_str(&nsec)
++            let keys = nostr::key::Keys::from_str(&nsec)
+                 .map_err(|e| anyhow!("failed to parse nsec key: {e:?}"))?;
+             Ok::<_, anyhow::Error>(keys)
+         })
+diff --git a/crates/breez-sdk/lnurl/src/routes.rs b/crates/breez-sdk/lnurl/src/routes.rs
+index a7d16e9..97aa2f8 100644
+--- a/crates/breez-sdk/lnurl/src/routes.rs
++++ b/crates/breez-sdk/lnurl/src/routes.rs
+@@ -17,7 +17,9 @@ use lnurl_models::{
+     RegisterLnurlPayResponse, TransferLnurlPayRequest, TransferLnurlPayResponse,
+     UnregisterLnurlPayRequest, sanitize_username, signed_message,
+ };
+-use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard};
++use nostr::event::{Event, Kind};
++use nostr::filter::SingleLetterTag;
++use nostr::nips::nip57::Nip57Tag;
+ use regex::Regex;
+ use serde::{Deserialize, Serialize};
+ use serde_json::{Value, json};
+@@ -1046,8 +1048,8 @@ fn validate_nostr_zap_request(
+     if event
+         .tags
+         .iter()
+-        .filter_map(nostr::Tag::single_letter_tag)
+-        .filter(|t| t.is_lowercase() && t.character == Alphabet::P)
++        .filter_map(nostr::event::Tag::single_letter_tag)
++        .filter(|t| *t == SingleLetterTag::LOWERCASE_P)
+         .count()
+         != 1
+     {
+@@ -1059,8 +1061,8 @@ fn validate_nostr_zap_request(
+     if event
+         .tags
+         .iter()
+-        .filter_map(nostr::Tag::single_letter_tag)
+-        .filter(|t| t.is_lowercase() && t.character == Alphabet::E)
++        .filter_map(nostr::event::Tag::single_letter_tag)
++        .filter(|t| *t == SingleLetterTag::LOWERCASE_E)
+         .count()
+         > 1
+     {
+@@ -1072,7 +1074,7 @@ fn validate_nostr_zap_request(
+     if !event
+         .tags
+         .iter()
+-        .any(|t| matches!(t.as_standardized(), Some(TagStandard::Relays(_))))
++        .any(|t| matches!(Nip57Tag::try_from(t), Ok(Nip57Tag::Relays(_))))
+     {
+         trace!("invalid nostr event, missing relay tag");
+         return Err(lnurl_error("invalid nostr event"));
+@@ -1080,12 +1082,12 @@ fn validate_nostr_zap_request(
+ 
+     // 6. If there is an amount tag, it MUST be equal to the amount query parameter.
+     if let Some(millisats) = event.tags.iter().find_map(|t| {
+-        if let Some(TagStandard::Amount { millisats, .. }) = t.as_standardized() {
++        if let Ok(Nip57Tag::Amount { millisats, .. }) = Nip57Tag::try_from(t) {
+             Some(millisats)
+         } else {
+             None
+         }
+-    }) && *millisats != amount_msat
++    }) && millisats != amount_msat
+     {
+         trace!("invalid nostr event, amount does not match");
+         return Err(lnurl_error("invalid nostr event"));
+@@ -1100,7 +1102,7 @@ fn validate_nostr_zap_request(
+     // response, so setting it pins the key they expect to see sign the receipt.
+     let mut uppercase_p_tags = event.tags.iter().filter(|t| {
+         t.single_letter_tag()
+-            .is_some_and(|t| t.is_uppercase() && t.character == Alphabet::P)
++            .is_some_and(|t| t == SingleLetterTag::UPPERCASE_P)
+     });
+     if let Some(tag) = uppercase_p_tags.next() {
+         if uppercase_p_tags.next().is_some() {
+@@ -1110,7 +1112,7 @@ fn validate_nostr_zap_request(
+ 
+         let pinned_signer = tag
+             .content()
+-            .and_then(|content| nostr::PublicKey::parse(content).ok())
++            .and_then(|content| nostr::key::PublicKey::parse(content).ok())
+             .and_then(|pubkey| pubkey.xonly().ok());
+         if pinned_signer != Some(receipt_pubkey) {
+             trace!("invalid nostr event, 'P' tag is not the receipt signer");
+@@ -1126,7 +1128,7 @@ fn validate_nostr_zap_request(
+ /// with. `None` when the service runs without a nostr key, which is also how it
+ /// reports that it supports no zaps.
+ fn user_nostr_pubkey(
+-    nostr_keys: Option<&nostr::Keys>,
++    nostr_keys: Option<&nostr::key::Keys>,
+     owner_pubkey: &str,
+ ) -> Result<Option<XOnlyPublicKey>, (StatusCode, Json<Value>)> {
+     let Some(nostr_keys) = nostr_keys else {
+@@ -1138,7 +1140,7 @@ fn user_nostr_pubkey(
+             error!("could not derive the receipt signing key: {e}");
+             lnurl_error("internal server error")
+         })?
+-        .public_key
++        .public_key()
+         .xonly()
+         .map_err(|e| {
+             error!("derived nostr pubkey could not be parsed: {:?}", e);
+@@ -1155,8 +1157,8 @@ fn user_nostr_pubkey(
+ /// deployment serving several domains may see legitimate cross-domain values.
+ fn log_lnurl_tag_mismatch(event: &Event, domain: &str, username: &str) {
+     let Some(tag) = event.tags.iter().find_map(|t| {
+-        if let Some(TagStandard::Lnurl(lnurl)) = t.as_standardized() {
+-            Some(lnurl.clone())
++        if let Ok(Nip57Tag::Lnurl(lnurl)) = Nip57Tag::try_from(t) {
++            Some(lnurl)
+         } else {
+             None
+         }
+@@ -1993,6 +1995,7 @@ mod tests {
+     use crate::user::User;
+     use crate::webhooks::repository::WebhookRepositoryError;
+     use crate::zap::Zap;
++    use nostr::event::{FinalizeEvent, IntoEventBuilder};
+     use axum::body::Bytes;
+     use axum::http::{HeaderMap, StatusCode};
+     use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
+@@ -3749,44 +3752,37 @@ mod tests {
+ 
+     // -- Zap request validation ------------------------------------------------
+ 
+-    fn zap_request(tags: Vec<nostr::Tag>, keys: &nostr::Keys) -> Event {
+-        nostr::EventBuilder::new(nostr::Kind::ZapRequest, "")
++    fn zap_request(tags: Vec<nostr::event::Tag>, keys: &nostr::key::Keys) -> Event {
++        nostr::event::EventBuilder::new(nostr::event::Kind::ZapRequest, "")
+             .tags(tags)
+-            .sign_with_keys(keys)
++            .finalize(keys)
+             .unwrap()
+     }
+ 
+     /// The tags every zap request needs to get past the earlier rules.
+-    fn base_tags() -> Vec<nostr::Tag> {
++    fn base_tags() -> Vec<nostr::event::Tag> {
+         vec![
+-            nostr::Tag::public_key(nostr::Keys::generate().public_key),
+-            nostr::Tag::from_standardized_without_cell(TagStandard::Relays(vec![
+-                "wss://relay.example".parse().unwrap(),
+-            ])),
++            nostr::event::Tag::public_key(nostr::key::Keys::generate().public_key()),
++            Nip57Tag::Relays(vec!["wss://relay.example".parse().unwrap()]).into(),
+         ]
+     }
+ 
+-    fn uppercase_p_tag(pubkey: nostr::PublicKey) -> nostr::Tag {
+-        nostr::Tag::from_standardized_without_cell(TagStandard::PublicKey {
+-            public_key: pubkey,
+-            relay_url: None,
+-            alias: None,
+-            uppercase: true,
+-        })
++    fn uppercase_p_tag(pubkey: nostr::key::PublicKey) -> nostr::event::Tag {
++        nostr::event::Tag::custom("P", [pubkey.to_hex()])
+     }
+ 
+     /// The key the request would be receipted with, as a sender reads it from
+     /// the LNURL-pay response.
+-    fn receipt_signer() -> (nostr::Keys, XOnlyPublicKey) {
+-        let keys = nostr::Keys::generate();
+-        let xonly = keys.public_key.xonly().unwrap();
++    fn receipt_signer() -> (nostr::key::Keys, XOnlyPublicKey) {
++        let keys = nostr::key::Keys::generate();
++        let xonly = keys.public_key().xonly().unwrap();
+         (keys, xonly)
+     }
+ 
+     #[test]
+     fn zap_request_without_a_p_tag_is_accepted() {
+         let (_, signer) = receipt_signer();
+-        let event = zap_request(base_tags(), &nostr::Keys::generate());
++        let event = zap_request(base_tags(), &nostr::key::Keys::generate());
+         assert!(validate_nostr_zap_request(1000, &event, signer).is_ok());
+     }
+ 
+@@ -3795,10 +3791,10 @@ mod tests {
+         // NIP-57 sets no timestamp tolerance, and a sender's clock is not ours
+         // to police; a request is held to one receipt instead.
+         let (_, signer) = receipt_signer();
+-        let event = nostr::EventBuilder::new(nostr::Kind::ZapRequest, "")
++        let event = nostr::event::EventBuilder::new(nostr::event::Kind::ZapRequest, "")
+             .tags(base_tags())
+-            .custom_created_at(nostr::Timestamp::from(1_600_000_000))
+-            .sign_with_keys(&nostr::Keys::generate())
++            .custom_created_at(nostr::types::Timestamp::from(1_600_000_000))
++            .finalize(&nostr::key::Keys::generate())
+             .unwrap();
+         assert!(validate_nostr_zap_request(1000, &event, signer).is_ok());
+     }
+@@ -3808,14 +3804,14 @@ mod tests {
+     #[test]
+     fn zap_request_p_tag_must_be_the_receipt_signer() {
+         let (signer_keys, signer) = receipt_signer();
+-        let sender = nostr::Keys::generate();
++        let sender = nostr::key::Keys::generate();
+ 
+         let mut tags = base_tags();
+-        tags.push(uppercase_p_tag(signer_keys.public_key));
++        tags.push(uppercase_p_tag(signer_keys.public_key()));
+         assert!(validate_nostr_zap_request(1000, &zap_request(tags, &sender), signer).is_ok());
+ 
+         let mut tags = base_tags();
+-        tags.push(uppercase_p_tag(sender.public_key));
++        tags.push(uppercase_p_tag(sender.public_key()));
+         assert!(
+             validate_nostr_zap_request(1000, &zap_request(tags, &sender), signer).is_err(),
+             "a 'P' tag pinning any key but the receipt signer must be rejected"
+@@ -3825,10 +3821,10 @@ mod tests {
+     #[test]
+     fn zap_request_with_multiple_p_tags_is_rejected() {
+         let (signer_keys, signer) = receipt_signer();
+-        let sender = nostr::Keys::generate();
++        let sender = nostr::key::Keys::generate();
+         let mut tags = base_tags();
+-        tags.push(uppercase_p_tag(signer_keys.public_key));
+-        tags.push(uppercase_p_tag(signer_keys.public_key));
++        tags.push(uppercase_p_tag(signer_keys.public_key()));
++        tags.push(uppercase_p_tag(signer_keys.public_key()));
+         assert!(validate_nostr_zap_request(1000, &zap_request(tags, &sender), signer).is_err());
+     }
+ 
+@@ -3840,15 +3836,16 @@ mod tests {
+     /// the wrong field, fails this.
+     #[test]
+     fn an_address_advertises_the_key_its_receipts_are_signed_with() {
+-        let server = nostr::Keys::generate();
++        let server = nostr::key::Keys::generate();
+         let owner = "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+         let other_owner = "03f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30211203f4e5d6c7b8a9";
+ 
+-        let request = zap_request(base_tags(), &nostr::Keys::generate());
+-        let receipt =
+-            nostr::EventBuilder::zap_receipt("lnbc1", Some("preimage".to_string()), &request)
+-                .sign_with_keys(&crate::zap::derive_user_nostr_keys(&server, owner).unwrap())
+-                .unwrap();
++        let request = zap_request(base_tags(), &nostr::key::Keys::generate());
++        let receipt = nostr::nips::nip57::ZapReceipt::new("lnbc1", &request)
++            .preimage("preimage")
++            .into_event_builder()
++            .finalize(&crate::zap::derive_user_nostr_keys(&server, owner).unwrap())
++            .unwrap();
+ 
+         let advertised = user_nostr_pubkey(Some(&server), owner).unwrap();
+         assert_eq!(
+diff --git a/crates/breez-sdk/lnurl/src/state.rs b/crates/breez-sdk/lnurl/src/state.rs
+index 8a22b28..1e10594 100644
+--- a/crates/breez-sdk/lnurl/src/state.rs
++++ b/crates/breez-sdk/lnurl/src/state.rs
+@@ -19,7 +19,7 @@ pub struct State<DB> {
+     /// `None` disables the per-pubkey registration limit.
+     pub registration_limit: Option<crate::repository::RegistrationLimit>,
+     pub domains: Arc<RwLock<crate::domains::DomainMap>>,
+-    pub nostr_keys: Option<nostr::Keys>,
++    pub nostr_keys: Option<nostr::key::Keys>,
+     pub ca_cert: Option<Vec<u8>>,
+     pub crl_url: Option<String>,
+     pub crl: HashSet<String>,
+diff --git a/crates/breez-sdk/lnurl/src/zap.rs b/crates/breez-sdk/lnurl/src/zap.rs
+index 0638956..e91fa79 100644
+--- a/crates/breez-sdk/lnurl/src/zap.rs
++++ b/crates/breez-sdk/lnurl/src/zap.rs
+@@ -35,7 +35,8 @@ where
+ // -- Background processor for publishing zap receipts to nostr relays ----------
+ 
+ use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
+-use nostr::{JsonUtil, TagStandard};
++use nostr::event::{FinalizeEvent, IntoEventBuilder};
++use nostr::nips::nip57::Nip57Tag;
+ use tracing::{debug, error, warn};
+ 
+ /// Retry configuration for zap receipt publishing.
+@@ -56,7 +57,7 @@ fn next_retry_delay(retry_count: i32) -> i64 {
+ /// Start the zap receipt background processor.
+ pub fn start_background_processor<DB>(
+     db: DB,
+-    nostr_keys: Option<&nostr::Keys>,
++    nostr_keys: Option<&nostr::key::Keys>,
+     trigger_rx: tokio::sync::watch::Receiver<()>,
+ ) where
+     DB: LnurlRepository + Clone + Send + Sync + 'static,
+@@ -85,7 +86,7 @@ pub fn start_background_processor<DB>(
+ }
+ 
+ /// Process pending zap receipts, fetching in batches until the queue is drained.
+-async fn process_pending_zap_receipts<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>)
++async fn process_pending_zap_receipts<DB>(db: &DB, nostr_keys: Option<&nostr::key::Keys>)
+ where
+     DB: LnurlRepository + Clone + Send + Sync + 'static,
+ {
+@@ -120,7 +121,7 @@ where
+ #[allow(clippy::too_many_lines)]
+ async fn process_pending_zap_receipt<DB>(
+     db: &DB,
+-    nostr_keys: Option<&nostr::Keys>,
++    nostr_keys: Option<&nostr::key::Keys>,
+     item: &crate::repository::PendingZapReceipt,
+ ) where
+     DB: LnurlRepository + Clone + Send + Sync + 'static,
+@@ -268,9 +269,9 @@ const RECEIPT_KEY_DERIVATION_PREFIX: &[u8] = b"lnurl-zap-receipt-key:";
+ /// Keyed on the user's wallet rather than their username, so a rename keeps
+ /// their receipt history verifiable while a transfer to another wallet does not.
+ pub fn derive_user_nostr_keys(
+-    server: &nostr::Keys,
++    server: &nostr::key::Keys,
+     owner_pubkey: &str,
+-) -> Result<nostr::Keys, anyhow::Error> {
++) -> Result<nostr::key::Keys, anyhow::Error> {
+     let owner_pubkey = owner_pubkey.to_lowercase();
+     (0u8..=u8::MAX)
+         .find_map(|counter| {
+@@ -280,9 +281,9 @@ pub fn derive_user_nostr_keys(
+             // Covers the vanishing chance that a digest is not a valid scalar.
+             engine.input(&[counter]);
+             let hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
+-            nostr::SecretKey::from_slice(&hmac.to_byte_array())
++            nostr::key::SecretKey::from_slice(&hmac.to_byte_array())
+                 .ok()
+-                .map(nostr::Keys::new)
++                .map(nostr::key::Keys::new)
+         })
+         .ok_or_else(|| anyhow::anyhow!("no digest of the receipt key was a valid secp256k1 scalar"))
+ }
+@@ -290,7 +291,7 @@ pub fn derive_user_nostr_keys(
+ /// Publish a zap receipt to nostr relays.
+ async fn publish_zap_receipt<DB>(
+     db: &DB,
+-    nostr_keys: &nostr::Keys,
++    nostr_keys: &nostr::key::Keys,
+     zap: &Zap,
+     bolt11: &str,
+     preimage: &str,
+@@ -298,20 +299,21 @@ async fn publish_zap_receipt<DB>(
+ where
+     DB: LnurlRepository + Clone + Send + Sync + 'static,
+ {
+-    let zap_request = nostr::Event::from_json(&zap.zap_request)?;
++    let zap_request = nostr::event::Event::from_json(&zap.zap_request)?;
+     let signing_keys = derive_user_nostr_keys(nostr_keys, &zap.user_pubkey)?;
+ 
+     // Build the zap receipt
+-    let zap_event =
+-        nostr::EventBuilder::zap_receipt(bolt11, Some(preimage.to_string()), &zap_request)
+-            .sign_with_keys(&signing_keys)?;
++    let zap_event = nostr::nips::nip57::ZapReceipt::new(bolt11, &zap_request)
++        .preimage(preimage)
++        .into_event_builder()
++        .finalize(&signing_keys)?;
+ 
+     let relays: Vec<_> = zap_request
+         .tags
+         .iter()
+         .filter_map(|t| {
+-            if let Some(TagStandard::Relays(r)) = t.as_standardized() {
+-                Some(r.clone())
++            if let Ok(Nip57Tag::Relays(r)) = Nip57Tag::try_from(t) {
++                Some(r)
+             } else {
+                 None
+             }
+@@ -326,7 +328,9 @@ where
+ 
+     // Same key that signed the receipt, so relay AUTH does not identify the
+     // service under a different pubkey than the one it publishes as.
+-    let nostr_client = nostr_sdk::Client::new(signing_keys);
++    let nostr_client = nostr_sdk::client::Client::builder()
++        .authenticator(nostr_sdk::prelude::SignerAuthenticator::new(signing_keys))
++        .build();
+     for r in &relays {
+         if let Err(e) = nostr_client.add_relay(r).await {
+             warn!("Failed to add relay {r}: {e}");
+@@ -360,7 +364,10 @@ where
+ #[cfg(test)]
+ mod derivation_tests {
+     use super::derive_user_nostr_keys;
+-    use nostr::{EventBuilder, JsonUtil, Keys, Kind};
++    use nostr::event::{FinalizeEvent, IntoEventBuilder};
++    use nostr::nips::nip57::ZapReceipt;
++    use nostr::event::{EventBuilder, Kind};
++    use nostr::key::Keys;
+ 
+     const OWNER_A: &str = "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+     const OWNER_B: &str = "03f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30211203f4e5d6c7b8a9";
+@@ -375,24 +382,25 @@ mod derivation_tests {
+         let a = derive_user_nostr_keys(&server, OWNER_A).unwrap();
+ 
+         assert_eq!(
+-            a.public_key,
+-            derive_user_nostr_keys(&server, OWNER_A).unwrap().public_key,
++            a.public_key(),
++            derive_user_nostr_keys(&server, OWNER_A).unwrap().public_key(),
+             "the advertised key must not change between calls"
+         );
+         assert_eq!(
+-            a.public_key,
++            a.public_key(),
+             derive_user_nostr_keys(&server, &OWNER_A.to_uppercase())
+                 .unwrap()
+-                .public_key,
++                .public_key(),
+             "pubkey spelling must not produce a second identity for one user"
+         );
+         assert_ne!(
+-            a.public_key,
+-            derive_user_nostr_keys(&server, OWNER_B).unwrap().public_key,
++            a.public_key(),
++            derive_user_nostr_keys(&server, OWNER_B).unwrap().public_key(),
+             "two users sharing a key would make receipts interchangeable"
+         );
+         assert_ne!(
+-            a.public_key, server.public_key,
++            a.public_key(),
++            server.public_key(),
+             "the server key must not sign receipts directly"
+         );
+     }
+@@ -405,10 +413,10 @@ mod derivation_tests {
+         assert_ne!(
+             derive_user_nostr_keys(&server_keys(), OWNER_A)
+                 .unwrap()
+-                .public_key,
++                .public_key(),
+             derive_user_nostr_keys(&other_server, OWNER_A)
+                 .unwrap()
+-                .public_key
++                .public_key()
+         );
+     }
+ 
+@@ -419,23 +427,24 @@ mod derivation_tests {
+         let server = server_keys();
+         let sender = Keys::generate();
+         let zap_request = EventBuilder::new(Kind::ZapRequest, "")
+-            .sign_with_keys(&sender)
++            .finalize(&sender)
+             .unwrap();
+ 
+-        let receipt =
+-            EventBuilder::zap_receipt("lnbc1", Some("preimage".to_string()), &zap_request)
+-                .sign_with_keys(&derive_user_nostr_keys(&server, OWNER_A).unwrap())
+-                .unwrap();
++        let receipt = ZapReceipt::new("lnbc1", &zap_request)
++            .preimage("preimage")
++            .into_event_builder()
++            .finalize(&derive_user_nostr_keys(&server, OWNER_A).unwrap())
++            .unwrap();
+ 
+         assert!(receipt.verify().is_ok());
+         assert_ne!(
+             receipt.pubkey,
+-            derive_user_nostr_keys(&server, OWNER_B).unwrap().public_key,
++            derive_user_nostr_keys(&server, OWNER_B).unwrap().public_key(),
+             "receipt minted through user A validates against user B's advertised key"
+         );
+         assert_eq!(
+             receipt.pubkey,
+-            derive_user_nostr_keys(&server, OWNER_A).unwrap().public_key
++            derive_user_nostr_keys(&server, OWNER_A).unwrap().public_key()
+         );
+         assert!(!receipt.as_json().is_empty());
+     }
+diff --git a/crates/nip65-publisher/src/main.rs b/crates/nip65-publisher/src/main.rs
+index 10d5cfe..e5ce740 100644
+--- a/crates/nip65-publisher/src/main.rs
++++ b/crates/nip65-publisher/src/main.rs
+@@ -5,9 +5,10 @@ use base64::Engine;
+ use base64::engine::general_purpose::STANDARD;
+ use bitcoin::hashes::{Hash, sha256};
+ use clap::Parser;
+-use nostr::RelayUrl;
++use nostr::event::{FinalizeEvent, IntoEventBuilder};
+ use nostr::nips::nip65;
+-use nostr_sdk::Client;
++use nostr::types::RelayUrl;
++use nostr_sdk::prelude::{Client, SignerAuthenticator};
+ use tracing::{info, warn};
+ 
+ /// Breez-operated relay URL (requires NIP-42 authentication).
+@@ -53,7 +54,7 @@ fn main() -> Result<()> {
+ 
+ async fn run(cli: Cli) -> Result<()> {
+     // Parse the identity keys (used to sign the NIP-65 event)
+-    let signing_keys = nostr::Keys::parse(&cli.private_key)
++    let signing_keys = nostr::key::Keys::parse(&cli.private_key)
+         .context("invalid private key (expected 32-byte hex or nsec1 bech32)")?;
+ 
+     info!(
+@@ -89,8 +90,9 @@ async fn run(cli: Cli) -> Result<()> {
+         bail!("no valid relay URLs to publish");
+     }
+ 
+-    let event = nostr::EventBuilder::relay_list(relay_entries)
+-        .sign_with_keys(&signing_keys)
++    let event = nip65::RelayList::new(relay_entries)
++        .into_event_builder()
++        .finalize(&signing_keys)
+         .context("failed to sign NIP-65 event")?;
+ 
+     info!(
+@@ -100,7 +102,9 @@ async fn run(cli: Cli) -> Result<()> {
+     );
+ 
+     // Create the client with NIP-42 auth keys (for Breez relay authentication)
+-    let client = Client::new(auth_keys);
++    let client = Client::builder()
++        .authenticator(SignerAuthenticator::new(auth_keys))
++        .build();
+ 
+     let mut added = 0usize;
+     for url in &relay_urls {
+@@ -150,15 +154,15 @@ async fn run(cli: Cli) -> Result<()> {
+ /// Derive a Nostr keypair for NIP-42 authentication from a Breez API key.
+ ///
+ /// Derivation: `sha256(base64_decode(api_key))` → 32-byte secret key → Nostr keypair.
+-fn derive_nip42_keypair(api_key: &str) -> Result<nostr::Keys> {
++fn derive_nip42_keypair(api_key: &str) -> Result<nostr::key::Keys> {
+     let decoded = STANDARD
+         .decode(api_key)
+         .context("API key is not valid base64")?;
+ 
+     let hash = sha256::Hash::hash(&decoded);
+ 
+-    let secret_key = nostr::SecretKey::from_slice(hash.as_byte_array())
++    let secret_key = nostr::key::SecretKey::from_slice(hash.as_byte_array())
+         .context("failed to create secret key from hash")?;
+ 
+-    Ok(nostr::Keys::new(secret_key))
++    Ok(nostr::key::Keys::new(secret_key))
+ }
+diff --git a/Cargo.toml b/Cargo.toml
+index c83b5c8..549e86d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -275,3 +275,14 @@ wasm-bindgen-test = "0.3.50"
+ web-sys = { version = "0.3.77", features = ["console", "DomException"] }
+ webpki-roots = "1.0"
+ xshell = "0.2"
++
++# libsqlite3-sys 0.30.1 bundles SQLite 3.46.0, which predates the fixes for
++# CVE-2025-29087/29088/52099/3277 (3.49.1), CVE-2025-6965 (3.50.2),
++# CVE-2025-7709 (3.50.3) and CVE-2026-11822/11824 (3.53.2) — see
++# https://sqlite.org/cves.html. No newer 0.30.x release exists, and the
++# rusqlite 0.32.1 chain (kept for rusqlite_migration 1.3.1) requires ^0.30.1,
++# so we build the same crate skeleton with the libsqlite3-sys 0.38.2 sqlite3/
++# payload (SQLite 3.53.2, C ABI-compatible). build.sh assembles the crate from
++# checksum-pinned .crate tarballs into work/libsqlite3-sys.
++[patch.crates-io]
++libsqlite3-sys = { path = "../libsqlite3-sys" }

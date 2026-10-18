@@ -7,24 +7,27 @@ import org.junit.Test
 
 class WorkerNameTest {
 
+    // Synthetic seeds only — never put real device/wallet entropy in tests.
+    private val seedA = "0000000000000000000000000000000000000000000000000000000000000001"
+    private val seedB = "0000000000000000000000000000000000000000000000000000000000000002"
+
     @Test
     fun derivedNameIsStablePerSeed() {
-        val a = OnboardingDefaults.generateWorkerName("a36b0ef1a52088f9863da954fc3a3741")
-        val b = OnboardingDefaults.generateWorkerName("a36b0ef1a52088f9863da954fc3a3741")
+        val a = OnboardingDefaults.generateWorkerName(seedA)
+        val b = OnboardingDefaults.generateWorkerName(seedA)
         assertEquals(a, b)
     }
 
     @Test
     fun differentSeedsGetDifferentNames() {
-        // the two real device seeds must produce distinct names
-        val pixel = OnboardingDefaults.generateWorkerName("a36b0ef1a52088f9863da954fc3a3741")
-        val huawei = OnboardingDefaults.generateWorkerName("5700a6eee5aa2fcfe61fcb290bc97da6")
-        assertNotEquals(pixel, huawei)
+        val first = OnboardingDefaults.generateWorkerName(seedA)
+        val second = OnboardingDefaults.generateWorkerName(seedB)
+        assertNotEquals(first, second)
     }
 
     @Test
     fun nameShapeIsHenchAdjNoun() {
-        val name = OnboardingDefaults.generateWorkerName("5700a6eee5aa2fcfe61fcb290bc97da6")
+        val name = OnboardingDefaults.generateWorkerName(seedB)
         assertTrue("got: $name", name.matches(Regex("hench-[a-z]+-[a-z]+")))
     }
 

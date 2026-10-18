@@ -11,7 +11,9 @@ import net.nostr.hench.wallet.normalizeSparkSeedInput
 /**
  * Debug-only deterministic settings restore (adb-driven). Debug builds only;
  * release builds refuse and finish. This exists because the Settings UI cannot
- * be reliably automated and ops/restore needs a scriptable path:
+ * be reliably automated and ops/restore needs a scriptable path. The activity
+ * is non-exported, so `am start` works on debug builds only (shell may launch
+ * non-exported components of debuggable packages):
  *
  *   adb shell am start -n net.nostr.hench/.DebugRestoreActivity \
  *     --es worker_secret_hex "<hex>" \

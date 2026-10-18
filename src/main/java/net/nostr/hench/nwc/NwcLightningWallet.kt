@@ -68,6 +68,20 @@ class NwcLightningWallet(
     override suspend fun lookupInvoice(invoiceId: String): InvoiceStatus {
         val response = sendEncryptedRequest(NwcProtocol.lookupInvoiceRequest(invoiceId))
         val result = parseSuccess(response, NwcProtocol.METHOD_LOOKUP_INVOICE)
+        // Reject a transaction that does not name the invoice we asked about
+        // (a replayed ciphertext carrying an older settled result).
+        val returnedHash = result["payment_hash"]?.jsonPrimitive?.contentOrNull
+        val returnedInvoice = result["invoice"]?.jsonPrimitive?.contentOrNull
+        if (returnedHash != null && !invoiceId.startsWith("ln") &&
+            !returnedHash.equals(invoiceId, ignoreCase = true)
+        ) {
+            error("NWC lookup_invoice returned a different payment hash")
+        }
+        if (returnedInvoice != null && invoiceId.startsWith("ln") &&
+            !returnedInvoice.equals(invoiceId, ignoreCase = true)
+        ) {
+            error("NWC lookup_invoice returned a different invoice")
+        }
         return when {
             result["settled"]?.jsonPrimitive?.booleanOrNull == true -> InvoiceStatus.Settled
             result["preimage"]?.jsonPrimitive?.contentOrNull?.isNotBlank() == true -> InvoiceStatus.Settled
@@ -93,9 +107,12 @@ class NwcLightningWallet(
             connection.clientSecretHex,
         )
         val response = transport.request(connection, request)
-        require(response.kind == NwcProtocol.KIND_RESPONSE) { "unexpected NWC response kind ${response.kind}" }
-        require(response.pubkey.equals(connection.walletPubkeyHex, ignoreCase = true)) { "NWC response from unexpected pubkey" }
-        require(response.tags.any { it.size >= 2 && it[0] == "e" && it[1] == request.id }) { "NWC response missing request event tag" }
+        // Verify BEFORE correlation/decryption: a relay or attacker-signed
+        // event may carry replayed ciphertext; only a wallet-signed event with
+        // an id matching its exact content is a real response.
+        require(
+            NwcProtocol.verifyResponseEvent(response, connection.walletPubkeyHex, clientPubkey, request.id),
+        ) { "NWC response failed id/signature/correlation verification" }
         val decrypted = Nip04.decrypt(connection.clientSecretHex, connection.walletPubkeyHex, response.content)
         json.parseToJsonElement(decrypted).jsonObject
     }
@@ -143,9 +160,14 @@ class WebSocketNwcRelayTransport(
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 runCatching { parseRelayEvent(text) }.getOrNull()?.let { event ->
-                    if (event.kind == NwcProtocol.KIND_RESPONSE &&
-                        event.pubkey.equals(connection.walletPubkeyHex, ignoreCase = true) &&
-                        event.tags.any { it.size >= 2 && it[0] == "e" && it[1] == requestEvent.id }
+                    // Signed-event checks first: an unsigned or retagged event
+                    // must never complete this request.
+                    if (NwcProtocol.verifyResponseEvent(
+                            event,
+                            connection.walletPubkeyHex,
+                            requestEvent.pubkey,
+                            requestEvent.id,
+                        )
                     ) {
                         deferred.complete(event)
                         webSocket.close(1000, "nwc response received")

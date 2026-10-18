@@ -1,0 +1,14 @@
+# Pinned inputs for the Breez Spark 0.26.1 native rebuild — every download in
+# vendor/ is verified by build.sh (sha256sum -c). Do not change without a new
+# hash and a README note.
+# official published AAR — mvn.breez.technology/releases/breez_sdk_spark/bindings-android/0.26.1/
+e43753d50fb2a51f3ef93603b6674809ae23ffdb174f95ad90f9d8297b9d73a5  bindings-android-0.26.1.aar
+# spark-sdk source @ eab30baed1122824a33dc03ee81ef3d9454f5580 (v0.26.1)
+691309074df32967e62f6e3adeba793844394b0490ff6b7bdd67e6dfe5cd6439  spark-sdk-eab30baed1122824a33dc03ee81ef3d9454f5580.tar.gz
+# protoc 27.5 (build tool only, never ships) — github.com/protocolbuffers/protobuf v27.5
+33abede6330dd22fb9af47c2d9804ead3d86c82e025b9eef361a9ac2e955ecce  protoc-27.5-linux-x86_64.zip
+# libsqlite3-sys crates: 0.30.1 skeleton + 0.38.2 sqlite3/ payload (SQLite
+# 3.53.2) assembled by build.sh into work/libsqlite3-sys for the
+# [patch.crates-io] override in dependencies.patch — crates.io releases
+2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149  libsqlite3-sys-0.30.1.crate
+f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8  libsqlite3-sys-0.38.2.crate

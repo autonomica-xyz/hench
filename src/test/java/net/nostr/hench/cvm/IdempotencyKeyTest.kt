@@ -45,4 +45,15 @@ class IdempotencyKeyTest {
         val b = ctx("c", weird, "download_media", """{"url":"u","mode":"audio"}""")
         assertEquals(a.idempotencyKey, b.idempotencyKey)
     }
+
+    @Test
+    fun injectedArrayDelimitersCannotCollideKeys() {
+        // The key used to interpolate raw strings into a JSON-array literal,
+        // so `id="1\",\"tool"` + `tool="x"` and `id="1"` + `tool="tool\",\"x"`
+        // hashed to the same key — a client could replay-hit another
+        // invocation's cached/paid record.
+        val a = ctx("c", "1\",\"tool", "x", """{"url":"u","mode":"audio"}""")
+        val b = ctx("c", "1", "tool\",\"x", """{"url":"u","mode":"audio"}""")
+        assertNotEquals(a.idempotencyKey, b.idempotencyKey)
+    }
 }

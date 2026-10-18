@@ -71,6 +71,89 @@ class NwcWalletClientTest {
         assertEquals(InvoiceStatus.Settled, wallet.lookupInvoice("hash2500"))
     }
 
+    // HIGH-1 regression: the client must verify event id + signature before
+    // trusting the decrypted payload. These events carry authentic signed
+    // vectors, then mutated — each must be rejected.
+
+    @Test
+    fun rejectsResponseSignedByWrongKey() = runBlocking {
+        val attackerSecret = "0".repeat(63) + "9"
+        val transport = FakeNwcTransport { request ->
+            // Attacker-signed event carrying replayable-looking ciphertext.
+            NostrEventSigner.sign(
+                NostrEventEnvelope(
+                    kind = NwcProtocol.KIND_RESPONSE,
+                    content = Nip04.encrypt(walletSecret, clientPubkey, """{"result_type":"lookup_invoice","result":{"settled":true}}""", ByteArray(16) { 7 }),
+                    tags = listOf(listOf("p", clientPubkey), listOf("e", request.id)),
+                ),
+                attackerSecret,
+            )
+        }
+        val wallet = NwcLightningWallet(connection, transport)
+        val outcome = runCatching { wallet.lookupInvoice("hash2500") }
+        assertTrue(outcome.isFailure)
+    }
+
+    @Test
+    fun rejectsRetaggedHistoricalSignedResponse() = runBlocking {
+        // The replay attack from the review: a real wallet-signed response for
+        // an older request is re-delivered with its e-tag swapped to the new
+        // request id. The signature no longer covers the mutated event, so the
+        // recomputed id must not match.
+        val transport = FakeNwcTransport { request ->
+            val historical = walletResponse(
+                requestId = "old-request-id",
+                content = """{"result_type":"lookup_invoice","result":{"settled":true}}""",
+            )
+            // Malicious relay retags it to correlate with the new request.
+            historical.copy(tags = listOf(listOf("p", clientPubkey), listOf("e", request.id)))
+        }
+        val wallet = NwcLightningWallet(connection, transport)
+        val outcome = runCatching { wallet.lookupInvoice("hash2500") }
+        assertTrue("retagged historical response must be rejected", outcome.isFailure)
+    }
+
+    @Test
+    fun rejectsResponseWithForgedId() = runBlocking {
+        val transport = FakeNwcTransport { request ->
+            walletResponse(
+                requestId = request.id,
+                content = """{"result_type":"lookup_invoice","result":{"settled":true}}""",
+            ).copy(id = "ff".repeat(32))
+        }
+        val wallet = NwcLightningWallet(connection, transport)
+        assertTrue(runCatching { wallet.lookupInvoice("hash2500") }.isFailure)
+    }
+
+    @Test
+    fun rejectsResponseWithBadSignature() = runBlocking {
+        // Signature from an attacker key over the mutated content is still not
+        // the wallet's signature — the pubkey check catches key swaps, this
+        // catches sig-forgery attempts under the wallet's own pubkey.
+        val transport = FakeNwcTransport { request ->
+            walletResponse(
+                requestId = request.id,
+                content = """{"result_type":"lookup_invoice","result":{"settled":true}}""",
+            ).copy(sig = "00".repeat(64))
+        }
+        val wallet = NwcLightningWallet(connection, transport)
+        assertTrue(runCatching { wallet.lookupInvoice("hash2500") }.isFailure)
+    }
+
+    @Test
+    fun lookupInvoiceRejectsResponseForDifferentInvoice() = runBlocking {
+        // Defense in depth: even a properly signed wallet response must name
+        // the transaction we queried.
+        val transport = FakeNwcTransport { request ->
+            walletResponse(
+                requestId = request.id,
+                content = """{"result_type":"lookup_invoice","result":{"settled":true,"payment_hash":"other-hash"}}""",
+            )
+        }
+        val wallet = NwcLightningWallet(connection, transport)
+        assertTrue(runCatching { wallet.lookupInvoice("hash2500") }.isFailure)
+    }
+
     private fun walletResponse(requestId: String, content: String): NostrSignedEvent {
         return NostrEventSigner.sign(
             NostrEventEnvelope(

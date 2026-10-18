@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Hench release-readiness evidence: Android, CLI, browser client, nsite, native dependencies, verified scenarios, and remaining release checks.">
+  <title>Hench — public release readiness · 18 October 2026</title>
+  <style>
+    :root { --bg:#101713; --panel:#18221c; --fg:#f2f5ec; --muted:#bac8ba; --line:#3b4d40; --accent:#c6f18c; --warn:#f6ce85; --red:#ffb3a7; }
+    * { box-sizing:border-box; }
+    html { scroll-padding-top:1.5rem; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.65 "DejaVu Sans",sans-serif; }
+    a { color:var(--accent); text-underline-offset:.2em; }
+    a:hover { text-decoration-thickness:2px; }
+    :focus-visible { outline:3px solid var(--accent); outline-offset:5px; }
+    .skip { position:absolute; left:1rem; top:-10rem; padding:.7rem 1rem; background:var(--panel); z-index:5; }
+    .skip:focus { top:1rem; }
+    .shell { max-width:1450px; margin:auto; display:grid; grid-template-columns:225px minmax(0,1fr); gap:4rem; padding:3rem 3.5rem; }
+    aside { position:sticky; top:2rem; align-self:start; }
+    .wordmark { font:bold 2.7rem/1 "Liberation Mono",Consolas,monospace; letter-spacing:-.09em; color:var(--accent); }
+    .edition,.eyebrow,dt,.tag { font:12px/1.5 "Liberation Mono",Consolas,monospace; text-transform:uppercase; letter-spacing:.09em; }
+    .edition { color:var(--muted); margin:1.2rem 0 2rem; }
+    nav a { display:block; padding:.65rem 0; border-top:1px solid var(--line); color:var(--muted); text-decoration:none; font-size:14px; }
+    nav a:hover { color:var(--accent); }
+    .nav-note { font-size:12px; color:var(--muted); margin-top:2rem; }
+    main { min-width:0; }
+    header { padding-bottom:3rem; border-bottom:1px solid var(--line); }
+    .eyebrow { color:var(--accent); margin:0 0 1rem; }
+    h1 { font:normal clamp(3rem,6vw,5.5rem)/1.02 "Palatino Linotype","Book Antiqua",Palatino,serif; letter-spacing:-.045em; margin:0 0 1.5rem; }
+    .lede { max-width:780px; font-size:1.15rem; color:var(--muted); }
+    .verdict { border-left:4px solid var(--warn); background:var(--panel); padding:1.25rem 1.5rem; margin-top:2rem; }
+    .verdict strong { color:var(--warn); font-size:1.12rem; }
+    .verdict p { margin:.5rem 0 0; }
+    .meta { display:flex; flex-wrap:wrap; gap:.7rem 1.6rem; font-size:13px; color:var(--muted); margin-top:1.5rem; }
+    section { padding-top:3rem; scroll-margin-top:1rem; }
+    h2 { font-size:1.8rem; line-height:1.25; letter-spacing:-.04em; margin:0 0 1rem; }
+    h2 .num { font:13px "Liberation Mono",monospace; color:var(--accent); margin-right:.7rem; vertical-align:middle; }
+    h3 { font-size:1.13rem; margin:1.8rem 0 .6rem; }
+    p { margin:.65rem 0 1rem; }
+    ul,ol { padding-left:1.4rem; }
+    li { padding-left:.15rem; margin:.5rem 0; }
+    .muted,small { color:var(--muted); }
+    .notice { border:1px solid var(--line); padding:1rem 1.25rem; margin:1.25rem 0; }
+    .notice p:last-child { margin-bottom:0; }
+    .status { display:inline-block; font:700 11px/1.4 "Liberation Mono",monospace; text-transform:uppercase; letter-spacing:.04em; padding:.25rem .5rem; border:1px solid; border-radius:3px; white-space:nowrap; }
+    .pass { color:var(--accent); }
+    .pending { color:var(--warn); }
+    .limit { color:var(--muted); }
+    .critical { color:var(--red); }
+    .table-wrap { overflow-x:auto; margin:1rem 0; border:1px solid var(--line); }
+    table { width:100%; border-collapse:collapse; text-align:left; font-size:14px; }
+    caption { text-align:left; padding:.85rem 1rem; color:var(--muted); background:var(--panel); font-size:13px; }
+    th { background:var(--panel); font-weight:700; }
+    th,td { padding:.85rem 1rem; vertical-align:top; border-bottom:1px solid var(--line); }
+    tr:last-child td { border-bottom:0; }
+    td:first-child { min-width:135px; }
+    td p { margin:0 0 .5rem; }
+    td p:last-child { margin:0; }
+    code,pre { font-family:"Liberation Mono",Consolas,monospace; font-size:.85em; }
+    code { overflow-wrap:anywhere; color:var(--accent); }
+    pre { padding:1rem 1.2rem; background:var(--panel); border:1px solid var(--line); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
+    details { border-top:1px solid var(--line); padding:1rem 0; }
+    details:last-child { border-bottom:1px solid var(--line); }
+    summary { cursor:pointer; font-size:1.15rem; font-weight:700; padding:.3rem 0; }
+    summary small { font-size:12px; font-weight:400; margin-left:.5rem; }
+    details .detail-body { padding:.4rem 0 0 1.25rem; }
+    .two-col { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+    .two-col > div { min-width:0; }
+    .hash { font-size:11px; word-break:break-all; }
+    footer { border-top:1px solid var(--line); margin-top:3rem; padding-top:1.5rem; color:var(--muted); font-size:13px; }
+    @media(max-width:1000px) { .shell { grid-template-columns:170px minmax(0,1fr); gap:2rem; padding:2rem; } }
+    @media(max-width:720px) {
+      .shell { display:block; padding:1.5rem 1rem; }
+      aside { position:static; margin-bottom:2rem; }
+      .wordmark { font-size:2rem; }
+      .edition { margin:.7rem 0 1rem; }
+      nav { display:grid; grid-template-columns:1fr 1fr; gap:0 1rem; }
+      nav a { font-size:12px; padding:.5rem 0; }
+      .nav-note { display:none; }
+      h1 { font-size:3.3rem; }
+      .two-col { grid-template-columns:1fr; gap:0; }
+      th,td { padding:.7rem; }
+      .verdict { padding:1rem; }
+      details .detail-body { padding-left:.3rem; }
+    }
+    @media print {
+      :root { --bg:#fff; --panel:#f3f5f1; --fg:#111; --muted:#333; --line:#bbb; --accent:#204c15; --warn:#634000; --red:#7d1300; }
+      body { font-size:10pt; }
+      .shell { display:block; padding:0; max-width:none; }
+      aside,.skip { display:none; }
+      header { padding-bottom:1rem; }
+      h1 { font-size:36pt; }
+      section { padding-top:1.5rem; }
+      h2,h3,summary { break-after:avoid; }
+      tr,.verdict,.notice { break-inside:avoid; }
+      .table-wrap { overflow:visible; }
+      table { font-size:9pt; }
+      details:not([open]) > :not(summary) { display:block !important; }
+      details::details-content { content-visibility:visible; }
+      summary { list-style:none; }
+      a { color:inherit; }
+      .two-col { display:block; }
+    }
+  </style>
+</head>
+<body>
+<a class="skip" href="#report">Skip to report</a>
+<div class="shell">
+  <aside aria-label="Report navigation">
+    <div class="wordmark">hench</div>
+    <p class="edition">Release engineering<br>18 October 2026</p>
+    <nav aria-label="Contents">
+      <a href="#decision">01 · Release decision</a>
+      <a href="#evidence">02 · Verification ledger</a>
+      <a href="#live">03 · Real end-to-end checks</a>
+      <a href="#changes">04 · Changes by repository</a>
+      <a href="#native">05 · Native &amp; dependency work</a>
+      <a href="#security">06 · Security findings</a>
+      <a href="#limits">07 · Limits &amp; operator actions</a>
+      <a href="#delivery">08 · Source &amp; delivery</a>
+    </nav>
+    <p class="nav-note">A self-contained report.<br>No JavaScript, CDN, telemetry, or external fonts. Browser printing produces a readable copy.</p>
+  </aside>
+  <main id="report">
+    <header>
+      <p class="eyebrow">autonomica.xyz / Release candidate audit</p>
+      <h1>Public release<br>readiness.</h1>
+      <p class="lede">What changed, what actually ran, and what still needs an operator decision across the Android worker, Rust CLI, browser client, and Nostr site publisher/host.</p>
+      <div class="verdict">
+        <strong>Local release-candidate flows verified. Production launch remains conditional.</strong>
+        <p>The Pixel and CLI completed real download/render workflows with simulated payment settlement. The minified Android wallet loads. This is evidence for the tested paths—not a claim that every platform, payment provider, or deployment configuration has been exercised.</p>
+      </div>
+      <div class="meta"><span>Scope: four repositories</span><span>Device: attached arm64 Pixel</span><span>Payments: simulated NWC; no funds moved</span><span>Production deployment: not performed</span></div>
+    </header>
+
+    <section id="decision" aria-labelledby="decision-title">
+      <h2 id="decision-title"><span class="num">01</span>Release decision</h2>
+      <p>This report is for the maintainer deciding whether to publish the code and deploy a public release. The audit fixed observed failures rather than treating a successful build as sufficient proof.</p>
+      <div class="table-wrap" tabindex="0" aria-label="Release decision table">
+        <table>
+          <thead><tr><th scope="col">Area</th><th scope="col">Assessment</th><th scope="col">Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Audited source</td><td><span class="status pass">Verified locally</span></td><td>Changes include regression coverage, dependency/build provenance, updated documentation, and MIT licensing for Hench's own code.</td></tr>
+            <tr><td>Core user journeys</td><td><span class="status pass">Exercised</span></td><td>Signed discovery → request → simulated payment → execution → delivered artifact worked against real local infrastructure and the Pixel.</td></tr>
+            <tr><td>Production money</td><td><span class="status pending">Operator check</span></td><td>No real Lightning payment, wallet spending, or funded recovery test was performed. Previously exposed recovery material must not remain in use.</td></tr>
+            <tr><td>Production deployment</td><td><span class="status pending">Not deployed</span></td><td>Official signing/distribution, production host configuration, and restart of the pre-existing nsite process remain separate release actions.</td></tr>
+            <tr><td>Residual advisories</td><td><span class="status limit">Documented</span></td><td>Expat has an unfixed upstream CPU-DoS advisory; exploitation through Hench was not demonstrated. Other native advisories were assessed against the selected features, not simply suppressed.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="notice"><strong>No invented readiness score.</strong><p>A percentage would hide the distinction between a working local download, a verified security boundary, and an untested real-money operation. Use the explicit checks and release actions below.</p></div>
+    </section>
+
+    <section id="evidence" aria-labelledby="evidence-title">
+      <h2 id="evidence-title"><span class="num">02</span>Verification ledger</h2>
+      <p>These are observed executions from the audit, not a list of tests that merely exist. Counts overlap and must not be added together.</p>
+      <div class="table-wrap" tabindex="0" aria-label="Automated verification ledger">
+        <table>
+          <caption>Passing executions and their timing limitations</caption>
+          <thead><tr><th scope="col">Check</th><th scope="col">Observed result</th><th scope="col">Scope / qualification</th></tr></thead>
+          <tbody>
+            <tr><td>Android JVM suite</td><td>211 passed; zero failures, errors, or skips</td><td>Full-suite snapshot before the final NIP-04 regression and notification-handling adjustment. Do not interpret this as a fresh full-suite run after those last edits.</td></tr>
+            <tr><td>Final Android NWC tests</td><td>28 passed; zero failures, errors, or skips</td><td>Targeted rerun after the final wire-format fix, including an independent Node-crypto / noble-secp256k1 interoperability vector. Overlaps the full-suite snapshot.</td></tr>
+            <tr><td>Pixel instrumentation</td><td>8 passed</td><td>Six browser-isolation checks, one partial Python-package-update recovery check, and one foreground-service startup check. These ran before the final NIP-04 edit; the final paid workflows were then exercised manually.</td></tr>
+            <tr><td>Android build / lint</td><td>Debug unit/lint/build gate passed; final debug and minified release builds passed</td><td>The final APKs were installed only under isolated QA package IDs. R8/JNA failures found by the release smoke were fixed and the final minified wallet was opened successfully.</td></tr>
+            <tr><td>CLI</td><td>14 tests passed; all-target Clippy with warnings denied passed; optimized build passed</td><td>Includes payment/storage boundaries and a real child-process regression for high-volume stderr and final error retention.</td></tr>
+            <tr><td>Native ContextVM workspace</td><td>840 passed; 4 ignored</td><td>Workspace snapshot before the final payment-initiation error change. Ignored tests were not counted as passing.</td></tr>
+            <tr><td>Final SDK payment subset</td><td>82 passed</td><td>Targeted rerun after correlated payment-error handling and its affected regressions changed. Both Android JNI targets were rebuilt afterward.</td></tr>
+            <tr><td>Browser clients</td><td>Deterministic regression scripts passed</td><td>Event shape/freshness, worker identity, invoice sanitation, request-ID and signed-event correlation, and stale replay rejection; both web and nsite copies were exercised.</td></tr>
+            <tr><td>Nsite</td><td>8 Node tests passed; 13 local serving checks passed</td><td>Host/publisher regressions plus actual root, named, and snapshot publishing/serving with local relay and Blossom infrastructure.</td></tr>
+            <tr><td>Dependency advisory scans</td><td>CLI: 310 crates; ContextVM: 281 crates; Maven: 74 resolved modules</td><td>No vulnerability findings in those checked graphs. Browser/nsite npm scans also reported zero findings. Spark full-lock and native-library qualifications are listed separately below.</td></tr>
+            <tr><td>HTML report</td><td>Desktop/mobile browser smoke passed</td><td>Opened at 1440 px and 390 px; section navigation, local links, lack of document-wide horizontal overflow, and expansion of collapsed sections for printing were checked. No JavaScript or external assets are required.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <details>
+        <summary>Commands and test isolation <small>for interpreting the evidence</small></summary>
+        <div class="detail-body">
+          <pre>./gradlew -I "$QA_INIT" testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease
+./gradlew -I "$QA_INIT" testDebugUnitTest --tests 'net.nostr.hench.nwc.*' assembleDebug assembleRelease
+adb shell am instrument -w -e class &lt;three selected test classes&gt; net.nostr.hench.qa.test/androidx.test.runner.AndroidJUnitRunner
+
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
+cargo build --release --locked
+cargo test --workspace --locked
+cargo test -p contextvm-sdk --locked payments::server_
+cargo ndk -t arm64-v8a -t x86_64 -P 24 -o . build --release --locked -p contextvm-ffi
+
+node test.mjs
+node --test host.test.mjs publish.test.mjs</pre>
+          <p><code>QA_INIT</code> denotes the temporary Gradle init script used during testing, not a file shipped in the repository. It assigned isolated package IDs and test signing. The selected device classes were <code>PythonPackageManagerInstrumentedTest</code>, <code>BrowserIsolationInstrumentedTest</code>, and <code>WorkerServiceStartInstrumentedTest</code>. The real-settlement test was not run.</p>
+          <p>Temporary scripts, services, device probes, port reverses, and QA installations were removed after verification. The original installed application and wallet were not modified. The pre-existing user nsite process was deliberately left alone.</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="live" aria-labelledby="live-title">
+      <h2 id="live-title"><span class="num">03</span>Real end-to-end checks</h2>
+      <p>Local relays and a controlled Blossom endpoint carried real signed messages and artifacts. The NWC fixture produced synthetic invoices and settlement responses; these were not real Lightning payments.</p>
+      <div class="table-wrap" tabindex="0" aria-label="End-to-end verification scenarios">
+        <table>
+          <thead><tr><th scope="col">Scenario</th><th scope="col">What was observed</th></tr></thead>
+          <tbody>
+            <tr><td>Pixel browser rendering</td><td>The web client discovered the Android worker, completed the handshake, displayed the invoice, received simulated settlement, and returned rendered page text containing a marker inserted by JavaScript. The result reported no load failure or truncation.</td></tr>
+            <tr><td>Pixel media delivery</td><td>YouTube audio download → on-device MP3 conversion → authenticated Blossom upload → client result completed. The downloaded output was independently checked with SHA-256 and ffprobe.</td></tr>
+            <tr><td>Minified Spark wallet</td><td>A fresh, unfunded QA-only wallet opened with a zero balance after the JNA/R8 fixes. The worker was disabled and configured for local relays. No send or funded receive was tested.</td></tr>
+            <tr><td>CLI unpaid and paid jobs</td><td>Real YouTube audio jobs completed through the CLI and Blossom. The final paid flow also completed from the mobile-sized, locally published nsite demo.</td></tr>
+            <tr><td>CLI restart / replay</td><td>A completed paid result survived process restart and was returned from durable history without creating another invoice. Unpaid request churn was also covered by the retention regression.</td></tr>
+            <tr><td>CLI storage failure</td><td>An owned filesystem blocker prevented the atomic job-store write. The client received an immediate correlated error, no invoice was issued, and the existing ledger remained byte-for-byte unchanged. Private filesystem diagnostics stayed server-side.</td></tr>
+            <tr><td>Authenticated stale replay</td><td>Old, genuinely signed invoice and result messages were rewrapped and delivered during a new invocation. They did not replace the new invoice or complete the unpaid job. Settling the current synthetic invoice then completed the job.</td></tr>
+            <tr><td>Invoice UI lifecycle</td><td>Both browser surfaces hid payment controls after completion and after a deliberately shortened real request timeout. JSON argument overrides dispatched without unrelated required form fields blocking submission.</td></tr>
+            <tr><td>Dashboard resilience</td><td>A failed first state request was followed by successful polling and complete platform controls. Name editing and dirty-form preservation worked. An unpaid hostile job URL rendered as text, not executable markup.</td></tr>
+            <tr><td>Dashboard request boundaries</td><td>Hostile Origin, Host, and Fetch Metadata requests were refused. Secret/configuration files were observed with private file and directory permissions.</td></tr>
+            <tr><td>Nsite publication / serving</td><td>Root, named, and snapshot manifests were published locally and served through their supported label forms. Production-mode tenant routing, forged/mismatched manifests, and publisher safety checks were exercised without publishing to public relays.</td></tr>
+            <tr><td>Native curl on Pixel</td><td>Import, Chrome-impersonated HTTPS, HTTP/2 upload/download, early upload rejection, and connection rotation succeeded. A 256 KiB upload was hash-verified.</td></tr>
+            <tr><td>Native FFmpeg on Pixel</td><td>An owned RTSP redirect chain reproduced the old unbounded behavior; the patched runtime stopped after the bounded redirect sequence. A real AV1/AAC clip was transcoded successfully to MP3.</td></tr>
+            <tr><td>Python / QuickJS on Pixel</td><td>Python and package imports, AES, HTTPS, and QuickJS BigInt execution succeeded against the rebuilt runtime.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap" tabindex="0" aria-label="Verified delivered audio artifacts">
+        <table>
+          <caption>Delivered artifact evidence—not permanent download links</caption>
+          <thead><tr><th scope="col">Producer</th><th scope="col">Audio / size</th><th scope="col">SHA-256</th></tr></thead>
+          <tbody>
+            <tr><td>Final Android job</td><td>MP3 · 19.005542 s · 120,620 bytes</td><td><code class="hash">1c97330dbdb915ed6cf88d3a308f78785e5c5fccf5963272364e70c58821bf0d</code></td></tr>
+            <tr><td>CLI job</td><td>MP3 · 19.005542 s · 120,620 bytes</td><td><code class="hash">ecaaf6da1cb99ccac9680db3380d152464df69d435a914ed42c0c0df215e2ad1</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">The temporary artifact server and tunnel were stopped. Dead test URLs, invoice strings, recovery words, wallet secrets, and device-specific credentials are intentionally not included in this public report.</p>
+    </section>
+
+    <section id="changes" aria-labelledby="changes-title">
+      <h2 id="changes-title"><span class="num">04</span>Changes by repository</h2>
+      <p>This inventory describes the release-candidate checkout, including pre-existing local project work being brought into version control. It does not imply that every newly tracked file was authored during the audit.</p>
+      <details open>
+        <summary>Android worker <small>hench</small></summary>
+        <div class="detail-body">
+          <ul>
+            <li><strong>NWC client authentication:</strong> validate the response's recomputed event ID, BIP-340 signature, expected wallet author, recipient, and request correlation before trusting or decrypting it.</li>
+            <li><strong>NWC interoperability:</strong> emit the standard unescaped Base64 IV rather than a URL-encoded IV. The previous encoder failed against the independent wallet fixture. Keep a deterministic external-implementation test vector.</li>
+            <li><strong>NWC server replay protection:</strong> canonical lowercase event IDs and persistent request-ledger handling prevent case variants and redelivery from becoming another spend.</li>
+            <li><strong>Wallet correctness:</strong> retain real payment preimages, page invoice lookup beyond the newest result window, and start the NWC server only after explicit pairing. These are source/regression checks, not a real-money settlement claim.</li>
+            <li><strong>Payment lifecycle:</strong> encode compound idempotency identities as JSON to prevent delimiter collisions, broaden in-flight deduplication, bound unpaid admission, retain paid/replay-sensitive records, and catch settlement at the polling deadline. Preserve monotonic payment states.</li>
+            <li><strong>Remote browser isolation:</strong> separate remote-rendering state from operator login cookies and fail closed when the isolation feature is unsupported. Block disallowed main-frame, subframe, subresource, and redirect destinations; treat selector input as data instead of JavaScript source.</li>
+            <li><strong>Blossom and URL handling:</strong> validate upload result URLs and redirect behavior; strengthen download URL/DNS safety boundaries.</li>
+            <li><strong>Runtime/package updates:</strong> track component install success independently so a successful curl install cannot mark a failed yt-dlp update complete. Replace the old Python byte-patching workaround, choose QuickJS explicitly, use adaptive video/audio merging, and return the proper MKV media type.</li>
+            <li><strong>Script/package and application lifecycle work:</strong> enforce canonical ZIP destination containment, correctly JSON-encode uploaded-file metadata, keep the debug restore activity non-exported, and update foreground-service startup. Remove obsolete onboarding/contract scaffolding and unused health-check code.</li>
+            <li><strong>Release-only JNI failures:</strong> preserve JNA native dispatch fields and generated structure/library names through R8. Scope the absent AWT API exclusion to JNA's desktop-only helpers. Verify the actual minified wallet rather than relying on debug builds.</li>
+            <li><strong>Protocol notification handling:</strong> accept the initialized notification without incorrectly trying to send a JSON-RPC response to it.</li>
+            <li><strong>Credential hygiene:</strong> replace exposed recovery-material fixtures with synthetic vectors, keep build credentials excluded from Git, and warn that deletion from current files does not revoke previously exposed material.</li>
+            <li><strong>Build and documentation:</strong> update Android tooling and native/JVM dependencies, include reproducible build inputs and patches, retain third-party license notices, and document runtime/ABI limitations.</li>
+          </ul>
+        </div>
+      </details>
+      <details open>
+        <summary>Rust worker and dashboard <small>hench-cli</small></summary>
+        <div class="detail-body">
+          <ul>
+            <li>Make the project a standalone checkout with its own manifest, lockfile, source, and vendored ContextVM SDK rather than relying on an unavailable neighboring SDK layout.</li>
+            <li>Authenticate NWC replies and bind settlement to the expected request/invoice instead of accepting attacker-signed or unrelated responses.</li>
+            <li>Persist the canonical job record before issuing an invoice, using private-at-creation files and atomic/fsynced writes. Refuse payment initiation when durable storage fails.</li>
+            <li>Keep paid replay history under unpaid request churn; reject interrupted or busy jobs rather than billing the same canonical invocation again.</li>
+            <li>Return correlated, sanitized payment-initiation errors in the shared SDK. Preserve detailed diagnostics in server logs and keep pre-invoice retry behavior.</li>
+            <li>Render job fields as text, protect administration from hostile origins and DNS rebinding, and require authentication when exposing the dashboard beyond loopback.</li>
+            <li>Fix dashboard name/form state and initial-fetch recovery so polling continues after a transient error and does not erase unsaved edits.</li>
+            <li>Drain the downloader's stderr pipe throughout execution while retaining only its final bounded error tail. The former early cutoff could break a verbose child process with SIGPIPE.</li>
+            <li>Update dependency pins, build documentation, and the project's own MIT license while preserving the SDK's upstream license.</li>
+          </ul>
+        </div>
+      </details>
+      <details open>
+        <summary>Static browser client <small>hench-web</small></summary>
+        <div class="detail-body">
+          <ul>
+            <li>Verify discovery and worker events cryptographically; enforce announcement freshness and reject forged or mismatched authors.</li>
+            <li>Correlate replies, progress, and payment messages to the outstanding signed request event and its JSON-RPC ID. An authentic old invoice/result cannot attach to a new invocation.</li>
+            <li>Keep client identity stable when local storage is available so completed canonical calls can use the worker's replay protection.</li>
+            <li>Make JSON overrides replace schema-form arguments without native required-field validation blocking dispatch.</li>
+            <li>Hide invoice controls on terminal success/failure and preserve the actual job result/status flow.</li>
+            <li>Vendor the browser's crypto/QR dependencies with source pins, hashes, and licenses instead of runtime CDN imports. Share wire/trust/correlation checks with the nsite demo.</li>
+          </ul>
+        </div>
+      </details>
+      <details open>
+        <summary>Nostr site publisher and host <small>hench-nsite</small></summary>
+        <div class="detail-body">
+          <ul>
+            <li>Verify manifest signatures and exact requested author, identifier, or snapshot ID; verify served blob bytes against the manifest digest.</li>
+            <li>Use canonical subdomain origins for public tenants. Shared-origin path-prefix routing requires explicit development mode; loopback binding is not treated as proof that a request is private.</li>
+            <li>Validate publisher-selected servers, BUD-03 locations, redirects, and resolved destination addresses at connection time. Keep the operator-configured fallback as a separate trusted setting.</li>
+            <li>Derive content type from authenticated path information rather than letting an untrusted blob host turn text into executable HTML.</li>
+            <li>Bound blob bytes, concurrent fetches, request URL size, relay messages, and fetch duration. Cache only immutable snapshots immutably.</li>
+            <li>Exclude hidden directories/files from publication, reject unsafe filenames and symlinks, and refuse public publishing with the built-in test key.</li>
+            <li>Make the local integration script use its own local key/services, handle occupied default ports, exercise root/named/snapshot routing, and clean up after itself.</li>
+            <li>Bring the demo's browser dependencies, replay defenses, argument overrides, and invoice cleanup in line with the standalone web client.</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <section id="native" aria-labelledby="native-title">
+      <h2 id="native-title"><span class="num">05</span>Native &amp; dependency work</h2>
+      <p>Updating a Maven or Python package version does not replace vulnerable native code embedded inside its archive. The audit therefore checked and rebuilt the payloads that the APK actually loads.</p>
+      <div class="table-wrap" tabindex="0" aria-label="Native and dependency provenance">
+        <table>
+          <thead><tr><th scope="col">Component</th><th scope="col">Updated / selected inputs</th><th scope="col">Verification and limits</th></tr></thead>
+          <tbody>
+            <tr><td>Android tooling / JVM</td><td>AGP 9.4.1; Kotlin 2.4.21; compile SDK/build-tools 37; target SDK 36; minimum API 24. Updated coroutines, WebKit, OkHttp, serialization, JNA, Jackson, Commons IO/Compress, credentials, atomicfu, XZ and Zstd dependencies.</td><td>The final resolved Maven graph had no reported vulnerability findings. Local AAR dependencies are explicit; XZ/Zstd complete the ZIP codec paths, with native-name preservation where required.</td></tr>
+            <tr><td>Python runtime</td><td>Python 3.14.6; OpenSSL 3.6.5; SQLite 3.54.1; Expat 2.9.0; zlib 1.3.2; xz 5.8.4; Mutagen 1.48.1; Cryptodomex 3.24.1; CFFI 2.1.1.</td><td>SHA-256-pinned Termux binaries repackaged into the existing wrapper layout, with runtime/dependency closure checks and preserved symlinks. Pixel imports, AES and HTTPS passed. Expat residual advisory remains.</td></tr>
+            <tr><td>QuickJS</td><td>Source-built 2026-06-04 release.</td><td>Both shipped ABIs built; Pixel BigInt smoke passed.</td></tr>
+            <tr><td>curl / impersonation</td><td>curl_cffi 0.16.3 API with local asset revision 0.16.3+hench.1; curl-impersonate 2.2.3 / curl 8.22.0 plus 20 fixes backported from 8.23.0; pinned BoringSSL.</td><td>Fixed the HTTP/2 upload vulnerability and relevant lifetime follow-ups. Corrected Android linking so shared Bionic libc is used instead of accidentally pulling in static libc. Full import/HTTPS/HTTP2 upload/rotation smoke passed. Impersonation package is arm64-only.</td></tr>
+            <tr><td>FFmpeg</td><td>9.0.2 with RTSP redirect-limit (CVE-2026-107696) and sample-rate validation backports.</td><td>Both ABIs built. Redirect regression and real media transcode passed on the Pixel. The original redirect test followed 32 redirects; the patched test stopped after nine requests.</td></tr>
+            <tr><td>ContextVM JNI</td><td>Vendored SDK port to nostr 0.45.5 / lru 0.18, updated Rust dependencies and payment error handling; production-only Tokio features.</td><td>Both ABIs rebuilt with 16 KiB LOAD alignment. Before the final behavior-only SDK patch, all 70 exported UniFFI checksum/contract values matched the previous library on the Pixel. Final JNI binaries were then exercised through the actual Android jobs.</td></tr>
+            <tr><td>Breez Spark</td><td>Official 0.26.1 Java/binding surface preserved; native payload rebuilt from pinned source with patched dependencies. SQLite 3.46.0 payload replaced with complete SQLite 3.53.2 source/bindings while retaining the wrapper's required Rust API.</td><td>Both ABIs built, export-name parity and ELF checks passed, and the final minified wallet loaded. Full-lock advisory findings were checked against the actual mobile normal/build dependency graph rather than hidden.</td></tr>
+            <tr><td>Browser dependencies</td><td>nostr-tools 2.25.2; @noble/hashes 2.4.0; qrcode 1.5.4; pinned self-contained bundles and upstream licenses.</td><td>No runtime CDN dependency. Browser/nsite npm advisory checks passed; real signed discovery and forged/replayed message rejection were exercised.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <details>
+        <summary>Artifact fingerprints <small>payloads in the verified checkout</small></summary>
+        <div class="detail-body">
+          <div class="table-wrap" tabindex="0" aria-label="Native artifact SHA-256 hashes">
+            <table><thead><tr><th scope="col">Artifact</th><th scope="col">SHA-256</th></tr></thead><tbody>
+              <tr><td>Bundled arm64 curl ZIP</td><td><code class="hash">363f59eb24e33bc5a18400579188f00f5f8b0c2e208405244adb1b7f1145dd76</code></td></tr>
+              <tr><td>Patched Spark AAR</td><td><code class="hash">a255ca940273092e1b5e80467e38a5c35b974a2bcc0fdbf4d54eff41a6ab2b39</code></td></tr>
+              <tr><td>Final arm64 ContextVM JNI</td><td><code class="hash">ed026d83e336a8cef5db7d053684dc514005bbfa8abda0317e0b02d8d1fea556</code></td></tr>
+              <tr><td>Final x86_64 ContextVM JNI</td><td><code class="hash">0dea94861f870c0a65b4145f5d425d15a7e6e918cd7c83dc2ed4c7ce6f1b758a</code></td></tr>
+            </tbody></table>
+          </div>
+          <p>These identify runtime payloads, not an officially signed production APK. Python and FFmpeg AARs are regenerated from the committed build recipes; build caches and local credentials are not publication inputs.</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="security" aria-labelledby="security-title">
+      <h2 id="security-title"><span class="num">06</span>Security findings and disposition</h2>
+      <p>The entries below distinguish demonstrated behavior, regression coverage, and dependency-only advisories. They are not a blanket guarantee that the projects have no remaining vulnerabilities.</p>
+      <div class="table-wrap" tabindex="0" aria-label="Security findings and disposition">
+        <table>
+          <thead><tr><th scope="col">Finding / boundary</th><th scope="col">Disposition</th><th scope="col">Evidence basis</th></tr></thead>
+          <tbody>
+            <tr><td>Exposed recovery material in fixtures</td><td><span class="status pending">Rotation required if used</span></td><td>Current fixtures replaced with synthetic values; intended publication files checked for the previously identified sensitive material. Existing Git history/exposure is not revoked by replacement. No secret values or affected wallet identifiers are included here.</td></tr>
+            <tr><td>Forged or miscorrelated NWC settlement</td><td><span class="status pass">Fixed / covered</span></td><td>Wallet response authentication and request/invoice correlation regressions; real NWC message exchange and synthetic settlement in final Android/CLI jobs.</td></tr>
+            <tr><td>Replay / duplicate charging or spending</td><td><span class="status pass">Fixed / covered</span></td><td>Durable replay ledgers, canonical event IDs, paid-history retention, live completed-job restart/replay, and stale signed browser-message replay checks.</td></tr>
+            <tr><td>Invoice issued without durable storage</td><td><span class="status pass">Fault-injected</span></td><td>CLI write failure left the ledger unchanged, issued no invoice, and surfaced a sanitized correlated error immediately.</td></tr>
+            <tr><td>Dashboard stored XSS / cross-origin admin</td><td><span class="status pass">Live checked</span></td><td>Hostile unpaid-job text did not execute. Host, Origin and Fetch Metadata boundary checks refused hostile requests.</td></tr>
+            <tr><td>Browser selector injection / session leakage</td><td><span class="status pass">Pixel checked</span></td><td>Injected selectors did not execute script; the rendering profile could not read operator cookies; denied navigation/subresource redirects were blocked.</td></tr>
+            <tr><td>Nsite tenant isolation / SSRF / forged content</td><td><span class="status pass">Fixed / covered</span></td><td>Canonical-origin routing, signature and exact filter matching, digest verification, destination restrictions, redirect handling, and authenticated MIME behavior covered by regressions and local serving checks.</td></tr>
+            <tr><td>Native embedded vulnerabilities</td><td><span class="status pass">Payloads replaced</span></td><td>Actual Python/TLS/curl/FFmpeg/Spark/ContextVM binaries rebuilt or replaced with pinned inputs and relevant patches; not just package metadata updates.</td></tr>
+            <tr><td>Expat CPU denial of service</td><td><span class="status limit">Upstream / conditional</span></td><td>Unfixed upstream advisory. Hench exploitability was not demonstrated. See the qualified assessment below.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Expat: not a demonstrated Hench exploit</h3>
+      <p><a href="https://github.com/libexpat/libexpat/issues/1076">CVE-2025-66382</a> is an upstream CPU-denial-of-service issue. The maintainer reports that a crafted roughly 2 MiB XML file can take 25–100 seconds to process. The issue remained open without a published fix at the time of review, and the reproducer was not public.</p>
+      <p>Hench does not offer an XML-parsing job. However, the bundled yt-dlp imports <code>xml.etree.ElementTree</code> and calls <code>_download_xml</code> for manifests. That makes “no XML job” different from “no XML parser can ever be reached.” <strong>The specific vulnerable parsing path and a working attack through Hench were not established.</strong> Treat this as a residual dependency advisory, not as proof of a remotely exploitable Hench vulnerability or a standalone reason to block publication.</p>
+      <p>Job subprocess deadlines bound execution time but do not prevent CPU consumption before termination. The published impact is DoS, not reported code execution or wallet theft.</p>
+      <h3>Native advisories that were not silently ignored</h3>
+      <ul>
+        <li><strong>Spark full lockfile:</strong> hickory-proto 0.25.2 (RUSTSEC-2026-0118/0119) and tokio-tar 0.3.1 (RUSTSEC-2025-0111) remain in non-shipped workspace/dev paths. They were absent from the selected Android normal/build graphs for both ABIs. Maintenance warnings remain for rustls-pemfile, paste, and proc-macro-error2.</li>
+        <li><strong>curl's nghttp2:</strong> CVE-2026-27135 requires extension-receive options not enabled by this integration. The impersonation fork retains its older priority API dependency.</li>
+        <li><strong>curl's ngtcp2:</strong> CVE-2026-40170 requires qlog, which the selected curl library path leaves off.</li>
+        <li><strong>TLS/backend applicability:</strong> the GnuTLS-only CVE-2026-107928 does not apply to this BoringSSL build. CVE-2026-86411 is already addressed by the curl 8.22.0 baseline. BoringSSL has no conventional release/CVE feed, so no universal “advisory-free” claim is made.</li>
+      </ul>
+    </section>
+
+    <section id="limits" aria-labelledby="limits-title">
+      <h2 id="limits-title"><span class="num">07</span>Limits and operator actions</h2>
+      <div class="two-col">
+        <div>
+          <h3>Before handling real value</h3>
+          <ol>
+            <li><strong>Retire exposed credentials wherever used.</strong> Move any affected funds to a fresh, privately generated seed and replace identities derived from exposed material. Rotation was not performed by the audit and must not be inferred from fixture cleanup.</li>
+            <li><strong>Confirm a small, authorized real-money workflow.</strong> Invoice creation, actual settlement, result delivery, accounting, and spending/refund expectations need operator validation with the chosen production wallet. This audit moved no funds.</li>
+            <li><strong>Review crash-window expectations.</strong> The CLI refuses a second charge after interrupted jobs, but a crash between invoice issuance and settlement recording can leave a paid-but-unrecorded invoice requiring operator reconciliation.</li>
+          </ol>
+          <h3>Before distributing or deploying</h3>
+          <ol>
+            <li>Build/sign the production artifact with release credentials. The tested installs were isolated QA packages; no store submission, upgrade of the original wallet-bearing app, or production signing check occurred.</li>
+            <li>Use an appropriate production Breez API key. The developer key file is ignored by Git, but its value is intentionally embedded in a built APK; APK distribution does not keep that key secret.</li>
+            <li>Deploy/restart the existing nsite service to load the patched host. Pushing source does not update a running process. Review public bind/proxy/origin configuration and leave development tenant routing disabled.</li>
+            <li>Provide required GPL corresponding source and build inputs for bundled components. MIT applies to Hench's own code; it does not erase third-party obligations. License notices alone are not a legal compliance certification.</li>
+          </ol>
+        </div>
+        <div>
+          <h3>Not exercised</h3>
+          <ul>
+            <li>x86_64 hardware or emulator execution; x86_64 was built and structurally checked.</li>
+            <li>Every supported website, cookie-authenticated extractor, device model, Android version, or network failure mode.</li>
+            <li>A separate final paid screenshot job or complete user-installed-script import-to-execution journey. Related code/regressions were reviewed; they are not claimed as live end-to-end passes.</li>
+            <li>Real Lightning spending/settlement, funded wallet recovery, or production credentials.</li>
+            <li>Sustained public-load/DoS testing, long soak tests, or a formal accessibility certification.</li>
+            <li>An Expat exploit against Hench, or a private upstream reproducer.</li>
+          </ul>
+          <h3>Known operational limits</h3>
+          <ul>
+            <li>CLI media URL checks occur before the downloader runs; hostile DNS rebinding during the external fetch is not claimed to be prevented.</li>
+            <li>Android WebView checks are not a claim of complete DNS-rebinding or browser-channel isolation. Secondary URLs fetched internally by yt-dlp are not all filtered by the initial URL check.</li>
+            <li>Nsite buffers each blob up to its configured limit; it is not an unbounded streaming CDN.</li>
+            <li>Installed script tools execute with app access and must be treated as trusted software.</li>
+            <li>Dependency results are a dated snapshot, not a guarantee against future disclosures.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="delivery" aria-labelledby="delivery-title">
+      <h2 id="delivery-title"><span class="num">08</span>Source and delivery</h2>
+      <p>The release work targets the existing <code>main</code> branch of each repository. This report travels with the Android repository; the final delivery handoff records the pushed commit IDs and the clean-worktree/remote comparison.</p>
+      <div class="table-wrap" tabindex="0" aria-label="Repository source links and audit baselines">
+        <table>
+          <thead><tr><th scope="col">Repository</th><th scope="col">Scope</th><th scope="col">Pre-audit commit</th></tr></thead>
+          <tbody>
+            <tr><td><a href="https://github.com/autonomica-xyz/hench">hench</a></td><td>Android, native runtimes, this report</td><td><code>3b7cffe4a904de1dfac4c6a73c3c745b8089046a</code></td></tr>
+            <tr><td><a href="https://github.com/autonomica-xyz/hench-cli">hench-cli</a></td><td>Rust worker and local dashboard</td><td><code>14027a2029f43d480fcbf63844e38ebbb61ae409</code></td></tr>
+            <tr><td><a href="https://github.com/autonomica-xyz/hench-web">hench-web</a></td><td>Static browser client</td><td><code>aedd69805a3f84dde2e9ad6f0de3295c2146947f</code></td></tr>
+            <tr><td><a href="https://github.com/autonomica-xyz/hench-nsite">hench-nsite</a></td><td>Publisher, host, and demo</td><td><code>9de01b826b1cff1ff09f0818fc88bb30ff2bbed7</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Build caches, generated outputs, local API credentials, and disposable QA fixtures are intentionally excluded from source publication. A clean Git working tree does not mean those ignored local build assets have been deleted, nor that old Git history has been scrubbed. No history rewrite or force-push is part of this delivery.</p>
+      <p><strong>Publication preflight:</strong> the intended source/artifact inventory was reviewed across all four repositories. A fresh check found no matches for the previously identified sensitive recovery material or the configured developer API key in publication files or directly archived members. This is a targeted current-tree check, not an exhaustive historical secret-forensics certification.</p>
+      <h3>Further evidence and upstream references</h3>
+      <ul>
+        <li><a href="../README.md">Android build, runtime, and license overview</a></li>
+        <li><a href="../native/README.md">ContextVM native provenance</a> · <a href="../native-python/README.md">Python / QuickJS provenance</a> · <a href="../native-curl/README.md">curl patches and feature-specific advisory assessment</a> · <a href="../native-spark/README.md">Spark selected dependency graph and SQLite replacement</a></li>
+        <li><a href="https://github.com/nostr-protocol/nips/blob/master/04.md">NIP-04 reference wire format</a> · <a href="https://github.com/libexpat/libexpat/issues/1076">Expat advisory and upstream status</a></li>
+      </ul>
+    </section>
+    <footer>
+      <p>Prepared from observed build/test output, live browser and Pixel checks, source changes, and dependency provenance during the 18 October 2026 release audit. Verification is intentionally scoped; untested behavior is labeled instead of promoted to a passing result.</p>
+      <p>Hench · <a href="https://autonomica.xyz">autonomica.xyz</a></p>
+    </footer>
+  </main>
+</div>
+</body>
+</html>

@@ -3,7 +3,6 @@ package net.nostr.hench.nwc
 import net.nostr.hench.identity.Bip340Schnorr
 import net.nostr.hench.identity.hexToBytes
 import java.net.URLDecoder
-import java.net.URLEncoder
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
@@ -22,7 +21,7 @@ object Nip04 {
         require(iv.size == 16) { "NIP-04 IV must be 16 bytes" }
         val cipherText = cipher(Cipher.ENCRYPT_MODE, senderSecretKeyHex, recipientPubkeyHex, iv)
             .doFinal(plainText.toByteArray(Charsets.UTF_8))
-        return base64(cipherText) + "?iv=" + urlEncode(base64(iv))
+        return base64(cipherText) + "?iv=" + base64(iv)
     }
 
     fun decrypt(recipientSecretKeyHex: String, senderPubkeyHex: String, encryptedContent: String): String {
@@ -45,6 +44,5 @@ object Nip04 {
     }
 
     private fun base64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
-    private fun urlEncode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
     private fun urlDecode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8.name())
 }

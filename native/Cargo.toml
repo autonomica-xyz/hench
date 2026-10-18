@@ -1,0 +1,3 @@
+[workspace]
+members = ["contextvm-sdk", "contextvm-ffi"]
+resolver = "2"

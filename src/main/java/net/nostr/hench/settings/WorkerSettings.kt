@@ -1,7 +1,6 @@
 package net.nostr.hench.settings
 
 import net.nostr.hench.auth.Platform
-import net.nostr.hench.auth.PlatformHealthChecker
 import net.nostr.hench.nwc.NwcConnectionUri
 import net.nostr.hench.worker.DeliveryMode
 
@@ -60,8 +59,6 @@ data class WorkerSettings(
 
     /** User-installed script tools turned ON (strictly opt-in; empty = none). */
     val enabledScriptTools: Set<String> = emptySet(),
-    /** Health checker settings. */
-    val healthCheckSettings: PlatformHealthChecker.PlatformHealthSettings = PlatformHealthChecker.PlatformHealthSettings(),
 ) {
     fun supports(mode: DeliveryMode): Boolean {
         return when (mode) {

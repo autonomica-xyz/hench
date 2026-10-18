@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import net.nostr.hench.BuildConfig
 import net.nostr.hench.auth.Platform
-import net.nostr.hench.auth.PlatformHealthChecker
 import net.nostr.hench.wallet.generateSparkSeedHex
 import java.time.LocalTime
 
@@ -53,12 +52,6 @@ class SharedPreferencesSettingsRepository(context: Context) {
             workerName = prefs.getString(KEY_WORKER_NAME, null)?.takeIf { it.isNotBlank() },
             disabledTools = (prefs.getStringSet(KEY_DISABLED_TOOLS, emptySet()) ?: emptySet()).toSet(),
             enabledScriptTools = (prefs.getStringSet(KEY_ENABLED_SCRIPT_TOOLS, emptySet()) ?: emptySet()).toSet(),
-            healthCheckSettings = PlatformHealthChecker.PlatformHealthSettings(
-                enabled = prefs.getBoolean(KEY_HEALTH_CHECK_ENABLED, true),
-                checkIntervalMinutes = prefs.getLong(KEY_HEALTH_CHECK_INTERVAL_MINUTES, 30),
-                maxJobsPerSession = prefs.getInt(KEY_HEALTH_MAX_JOBS, 100),
-                cooldownMinutes = prefs.getLong(KEY_HEALTH_COOLDOWN_MINUTES, 60),
-            ),
         ).withBuiltInSparkDefaults(
             bundledApiKey = BuildConfig.BREEZ_SPARK_API_KEY,
             seedFactory = ::generateSparkSeedHex,
@@ -104,10 +97,6 @@ class SharedPreferencesSettingsRepository(context: Context) {
             putString(KEY_WORKER_NAME, settings.workerName.orEmpty())
             putStringSet(KEY_DISABLED_TOOLS, settings.disabledTools)
             putStringSet(KEY_ENABLED_SCRIPT_TOOLS, settings.enabledScriptTools)
-            putBoolean(KEY_HEALTH_CHECK_ENABLED, settings.healthCheckSettings.enabled)
-            putLong(KEY_HEALTH_CHECK_INTERVAL_MINUTES, settings.healthCheckSettings.checkIntervalMinutes)
-            putInt(KEY_HEALTH_MAX_JOBS, settings.healthCheckSettings.maxJobsPerSession)
-            putLong(KEY_HEALTH_COOLDOWN_MINUTES, settings.healthCheckSettings.cooldownMinutes)
             when (val hours = settings.hoursOfOperation) {
                 HoursOfOperation.Always -> putBoolean(KEY_HOURS_ALWAYS, true)
                 is HoursOfOperation.Daily -> {
@@ -154,10 +143,6 @@ class SharedPreferencesSettingsRepository(context: Context) {
         const val KEY_WORKER_NAME = "worker_name"
         const val KEY_DISABLED_TOOLS = "disabled_tools"
         const val KEY_ENABLED_SCRIPT_TOOLS = "enabled_script_tools"
-        const val KEY_HEALTH_CHECK_ENABLED = "health_check_enabled"
-        const val KEY_HEALTH_CHECK_INTERVAL_MINUTES = "health_check_interval_minutes"
-        const val KEY_HEALTH_MAX_JOBS = "health_max_jobs"
-        const val KEY_HEALTH_COOLDOWN_MINUTES = "health_cooldown_minutes"
     }
 
     private fun loadPlatformList(key: String): List<Platform> {
