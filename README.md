@@ -93,12 +93,6 @@ Unit tests: `./gradlew testDebugUnitTest`. Instrumented tests under
 `src/androidTest` are written to run against an isolated QA applicationId
 (`net.nostr.hench.qa`) — never against an install holding a real wallet.
 
-## Release readiness
-
-The [release-readiness report](docs/release-readiness.html) records changes,
-observed verification, and remaining production checks across all four projects.
-Open the HTML file in a browser; it is self-contained and printable.
-
 ## License
 
 MIT for Hench's own code (see [LICENSE](LICENSE)). Bundled components retain
