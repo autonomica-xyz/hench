@@ -144,8 +144,7 @@ object BlossomAuthorization {
             ),
             secretKeyHex = secretKeyHex,
         )
-        val encoded = Base64.getUrlEncoder()
-            .withoutPadding()
+        val encoded = Base64.getEncoder()
             .encodeToString(json.encodeToString(NostrEventSigner.toJson(event)).toByteArray())
         return "Nostr $encoded"
     }

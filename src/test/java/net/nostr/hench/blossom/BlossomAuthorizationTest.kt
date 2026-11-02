@@ -22,7 +22,9 @@ class BlossomAuthorizationTest {
         )
 
         assertTrue(header.startsWith("Nostr "))
-        val tokenJson = String(Base64.getUrlDecoder().decode(header.removePrefix("Nostr ")))
+        // BUD-02 auth events are standard padded base64; strict servers (nak)
+        // reject URL-safe/unpadded tokens with "invalid base64 token".
+        val tokenJson = String(Base64.getDecoder().decode(header.removePrefix("Nostr ")))
         val token = Json.parseToJsonElement(tokenJson).jsonObject
         val tags = token["tags"]!!.jsonArray.map { tag ->
             tag.jsonArray.map { it.jsonPrimitive.content }
