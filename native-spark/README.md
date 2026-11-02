@@ -41,11 +41,17 @@ settings cannot substitute a system SQLite. This is a source rebuild, not a
 version-string change. SQLite's advisory history is at
 <https://sqlite.org/cves.html>.
 
-The full workspace lock retains three vulnerability advisories affecting two
-packages: hickory-proto 0.25.2 (RUSTSEC-2026-0118/0119) and tokio-tar 0.3.1
-(RUSTSEC-2025-0111). Neither package is in the selected Android normal/build
-dependency graph on either ABI; the enabling paths are testcontainers/dev
-features. Verify the actual graph rather than suppressing the full-lock audit:
+The full workspace lock retains vulnerability advisories on five packages:
+hickory-proto 0.25.2 (RUSTSEC-2026-0118/0119) and tokio-tar 0.3.1
+(RUSTSEC-2025-0111), neither of which is in the selected Android normal/build
+dependency graph on either ABI — the enabling paths are testcontainers/dev
+features — and crypto-bigint 0.4.9/0.5.5 (RUSTSEC-2026-0387), which does ship:
+it enters via hpke 0.10 (required by turnkey_enclave_encrypt 0.7.0's `hpke
+^0.10` pin) and via alloy-signer through boltz-client, and the advisory has no
+patched release below 0.7.x. Upgrading needs upstream releases of
+hpke/p256/alloy crates, i.e. a spark-sdk (or boltz-client) bump in
+dependencies.patch, not a lockfile refresh. Verify the actual graph rather
+than suppressing the full-lock audit:
 
 ```sh
 cd work/spark-sdk
@@ -55,9 +61,10 @@ cargo +1.95.0 tree --locked --offline -p breez-sdk-spark-bindings \
 # Repeat with --target x86_64-linux-android.
 ```
 
-Informational maintenance warnings remain for rustls-pemfile, paste and
-proc-macro-error2. The selected-graph check is dated 2026-10-18; it is not a
-blanket guarantee against future advisories.
+Informational maintenance warnings remain for rustls-pemfile, paste,
+proc-macro-error2, basic-toml, atomic-polyfill and derivative. The
+selected-graph check is dated 2026-10-29; it is not a blanket guarantee
+against future advisories.
 
 ## Application integration and licenses
 
