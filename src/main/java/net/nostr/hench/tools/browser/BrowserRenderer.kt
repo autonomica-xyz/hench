@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -18,8 +19,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import net.nostr.hench.tools.ytdlp.UrlSafety
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 
@@ -31,7 +38,7 @@ class UrlPolicyRejected(val code: String, reason: String) : Exception(reason)
 
 /**
  * Shared offscreen WebView runner for the browser tools (web_fetch,
- * page_screenshot). Renders on the main thread via a dedicated handler;
+ * page_screenshot, site_scrape). Renders on the main thread via a dedicated handler;
  * never touches any UI the user can see.
  *
  * Session isolation: every render runs in a dedicated, unauthenticated WebView
@@ -80,32 +87,47 @@ class BrowserRenderer(
         val finalUrl: String,
         val title: String,
         val text: String,
-        val html: String,
         val loadFailed: Boolean,
         val errorMessage: String?,
+        /** Absolute hrefs of the page's links; only filled by load(collectLinks = true). */
+        val links: List<String> = emptyList(),
     )
 
     private class Session(
         val view: WebView,
         val profile: Profile?,
+        /** load() renders for text only: images and web fonts are never fetched. */
+        val textOnly: Boolean,
         /** Live OkHttp responses handed to the WebView; closed on teardown. */
         val openResponses: ConcurrentLinkedQueue<okhttp3.Response> = ConcurrentLinkedQueue(),
-    )
+    ) {
+        /** Main thread only. Once the renderer is gone the WebView may only be destroyed. */
+        var rendererGone = false
+
+        /** Text-relevant network activity (images and fonts excluded); drives [settle]. */
+        @Volatile var lastNetNanos = System.nanoTime()
+        val fetching = AtomicInteger()
+    }
 
     private val walkClient = prefetchClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
         .build()
 
-    /** Load [url], wait for finish + optional CSS selector, return page content. */
+    /**
+     * Load [url] for its text: images and web fonts are never fetched, and after
+     * the page finishes it waits up to [extraWaitMs] for late, network-driven
+     * content (see [settle]) plus the optional CSS selector.
+     */
     suspend fun load(
         url: String,
         timeoutMs: Long = 45_000,
         waitForSelector: String? = null,
         extraWaitMs: Long = 1_200,
+        collectLinks: Boolean = false,
     ): Page = withTimeout(timeoutMs) {
         withContext(mainContext) {
-            val session = newSession()
+            val session = newSession(textOnly = true)
             val view = session.view
             try {
                 // Resolve redirects before the WebView commits; every hop is
@@ -114,8 +136,9 @@ class BrowserRenderer(
                 val finished = awaitPageFinished(view, finalUrl, session)
                 var title = ""
                 var text = ""
+                var links = emptyList<String>()
                 if (finished.ok) {
-                    if (extraWaitMs > 0) kotlinx.coroutines.delay(extraWaitMs)
+                    settle(session, extraWaitMs)
                     if (waitForSelector != null) {
                         awaitSelector(view, waitForSelector, remainingOf(timeoutMs))
                     }
@@ -131,14 +154,19 @@ class BrowserRenderer(
                         "(function(){ var b = document.body; if (!b) return ''; " +
                             "var t = b.innerText; if (!t || !t.trim()) t = b.textContent; return t; })()",
                     ).orEmpty()
+                    if (collectLinks) {
+                        links = (evaluateJson(view, LINKS_SCRIPT) as? JsonArray)
+                            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                            .orEmpty()
+                    }
                 }
                 Page(
                     finalUrl = view.url ?: finalUrl,
                     title = title,
                     text = text,
-                    html = "",
-                    loadFailed = !finished.ok,
-                    errorMessage = finished.error,
+                    loadFailed = !finished.ok || session.rendererGone,
+                    errorMessage = if (session.rendererGone) RENDERER_GONE else finished.error,
+                    links = links,
                 )
             } finally {
                 session.cleanup()
@@ -156,7 +184,7 @@ class BrowserRenderer(
         extraWaitMs: Long = 1_000,
     ): Pair<Page, Bitmap> = withTimeout(timeoutMs) {
         withContext(mainContext) {
-            val session = newSession()
+            val session = newSession(textOnly = false)
             val view = session.view
             try {
                 view.layout(0, 0, width, height)
@@ -183,9 +211,8 @@ class BrowserRenderer(
                         finalUrl = view.url ?: finalUrl,
                         title = title,
                         text = "",
-                        html = "",
-                        loadFailed = !finished.ok,
-                        errorMessage = finished.error,
+                        loadFailed = !finished.ok || session.rendererGone,
+                        errorMessage = if (session.rendererGone) RENDERER_GONE else finished.error,
                     ),
                     bitmap,
                 )
@@ -279,10 +306,10 @@ class BrowserRenderer(
     }
 
     @SuppressLint("SetJavaScriptEnabled", "RequiresFeature")
-    private fun newSession(): Session {
+    private fun newSession(textOnly: Boolean): Session {
         val view = WebView(context)
         var profile: Profile? = null
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+        if (isolationSupported()) {
             // Fresh isolated profile: cookies/storage are scoped to it and stay
             // empty for the operator's real sessions. Must be set before the
             // WebView loads anything.
@@ -300,19 +327,23 @@ class BrowserRenderer(
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.loadsImagesAutomatically = true
+            // Text renders skip images: they never reach innerText and dominate heavy loads.
+            settings.blockNetworkImage = textOnly
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             runCatching {
                 profile!!.cookieManager.setAcceptThirdPartyCookies(this, true)
             }
         }
-        return Session(view, profile)
+        return Session(view, profile, textOnly)
     }
 
     /** Tear down a render session: abort in-flight fetches, blank, destroy, wipe profile state. */
     private fun Session.cleanup() {
-        runCatching { view.stopLoading() }
-        runCatching { view.loadUrl("about:blank") }
+        if (!rendererGone) {
+            runCatching { view.stopLoading() }
+            runCatching { view.loadUrl("about:blank") }
+        }
         runCatching { view.destroy() }
         var pending = openResponses.poll()
         while (pending != null) {
@@ -355,6 +386,16 @@ class BrowserRenderer(
                     if (request.isForMainFrame && result.compareAndSet(null, r)) cont.resume(r)
                 }
 
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    // OOM kill or crash of the renderer every WebView in the profile
+                    // shares: fail this render. Unhandled, Android kills the whole app,
+                    // worker included (low-RAM phones under a long site_scrape).
+                    session.rendererGone = true
+                    val r = LoadResult(ok = false, error = RENDERER_GONE)
+                    if (result.compareAndSet(null, r)) cont.resume(r)
+                    return true
+                }
+
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     // Called on the main thread for every main-frame navigation,
                     // including HTTP redirect hops (API 24+). Only the cheap
@@ -382,6 +423,11 @@ class BrowserRenderer(
                     val requestUrl = request.url?.toString() ?: return null
                     val scheme = request.url?.scheme?.lowercase()
                     if (scheme != "http" && scheme != "https") return null // data:/blob:/about:
+                    // Web fonts can't change innerText either; skip them for text renders.
+                    if (session.textOnly && FONT_FILE.containsMatchIn(request.url?.path.orEmpty())) return BLOCKED
+                    // Images never change page text: they don't count as activity for settle().
+                    val textual = request.requestHeaders?.get("Accept")?.startsWith("image/") != true
+                    if (textual) session.lastNetNanos = System.nanoTime()
                     if (cheapUrlPolicy(requestUrl) != null || urlPolicy(requestUrl) != null) {
                         if (request.isForMainFrame) blocked(requestUrl)
                         return BLOCKED
@@ -394,8 +440,14 @@ class BrowserRenderer(
                         if (request.isForMainFrame) blocked(requestUrl)
                         return METHOD_BLOCKED
                     }
+                    if (textual) session.fetching.incrementAndGet()
                     val response = runCatching {
                         fetchChecked(requestUrl, request.requestHeaders ?: emptyMap())
+                    }.also {
+                        if (textual) {
+                            session.fetching.decrementAndGet()
+                            session.lastNetNanos = System.nanoTime()
+                        }
                     }.getOrElse { e ->
                         return when {
                             e is UrlPolicyRejected || e is java.net.UnknownHostException -> {
@@ -434,12 +486,31 @@ class BrowserRenderer(
         }
     }
 
-    private suspend fun evaluateScript(view: WebView, script: String): String? =
+    /** Evaluate [script]; the WebView hands the result back JSON-encoded. Null if unparseable. */
+    private suspend fun evaluateJson(view: WebView, script: String): JsonElement? =
         suspendCancellableCoroutine { cont ->
             view.evaluateJavascript(script) { value ->
-                cont.resume(value?.trim('"')?.replace("\\n", "\n")?.replace("\\\"", "\""))
+                cont.resume(value?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() })
             }
         }
+
+    /** String result of [script], JSON-decoded (Chromium escapes `<`, tabs, quotes, …). */
+    private suspend fun evaluateScript(view: WebView, script: String): String? =
+        (evaluateJson(view, script) as? JsonPrimitive)?.contentOrNull
+
+    /**
+     * Wait for late content (XHR/fetch after load): until no text-relevant request
+     * is in flight and none happened for [QUIET_MS], at most [maxMs]. Static pages
+     * settle almost at once; chatty pages (polling, beacons) run into the cap.
+     */
+    private suspend fun settle(session: Session, maxMs: Long) {
+        val until = System.nanoTime() + maxMs * 1_000_000
+        while (System.nanoTime() < until &&
+            (session.fetching.get() > 0 || System.nanoTime() - session.lastNetNanos < QUIET_MS * 1_000_000)
+        ) {
+            kotlinx.coroutines.delay(SETTLE_POLL_MS)
+        }
+    }
 
     private fun remainingOf(timeoutMs: Long): Long = timeoutMs / 2
 
@@ -447,13 +518,28 @@ class BrowserRenderer(
 
     companion object {
         private const val POLL_MS = 250L
+        private const val SETTLE_POLL_MS = 50L
+
+        /** Network silence that counts as settled; Puppeteer's networkidle uses the same 500 ms. */
+        private const val QUIET_MS = 500L
+
+        /** Web font files; blocked for text renders. */
+        private val FONT_FILE = Regex("""\.(woff2?|ttf|otf|eot)$""", RegexOption.IGNORE_CASE)
         private const val MAX_REDIRECTS = 10
+
+        /** Absolute hrefs of every <a>/<area> link, resolved by the browser. */
+        private const val LINKS_SCRIPT = "Array.from(document.links, function (a) { return a.href; })"
 
         /** Dedicated WebView profile for paid renders; never sees operator logins. */
         internal const val PROFILE_NAME = "hench-reader"
 
         /** Connect-src merged into served HTML: same-origin + https only. */
         private const val CONNECT_CSP = "connect-src 'self' https:"
+
+        private const val RENDERER_GONE = "browser renderer process gone"
+
+        /** Browser tools only run where WebView can give them their own isolated profile. */
+        fun isolationSupported(): Boolean = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)
 
         /** Requests we can faithfully replay through the checked fetch (no body). */
         private val SAFE_METHODS = setOf("GET", "HEAD")

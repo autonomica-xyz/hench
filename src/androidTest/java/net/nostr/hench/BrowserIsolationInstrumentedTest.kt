@@ -1,12 +1,23 @@
 package net.nostr.hench
 
 import android.content.Context
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.test.core.app.ApplicationProvider
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import net.nostr.hench.tools.browser.BrowserRenderer
 import net.nostr.hench.tools.ytdlp.UrlSafety
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -60,6 +71,28 @@ class BrowserIsolationInstrumentedTest {
     }
 
     @Test
+    fun loadCollectsAbsoluteLinksAndDecodesText() = runBlocking {
+        assumeMultiProfile()
+        TestServer().use { server ->
+            server.respond(
+                mapOf(
+                    "/links" to textResponse(
+                        "<html><body><p>a &lt; b \"q\" back\\slash</p>" +
+                            "<table><tr><td>c1</td><td>c2</td></tr></table>" +
+                            "<a href=\"/next#frag\">n</a><a href=\"https://other.example/x\">o</a></body>",
+                    ),
+                ),
+            )
+            val page = renderer().load("$server/links", timeoutMs = 20_000, extraWaitMs = 100, collectLinks = true)
+            assertFalse(page.errorMessage ?: "", page.loadFailed)
+            // evaluateJavascript JSON-escapes `<`, tabs, quotes and backslashes; text must come back decoded.
+            assertTrue(page.text, page.text.contains("a < b \"q\" back\\slash"))
+            assertTrue(page.text, page.text.contains("c1\tc2"))
+            assertEquals(listOf("$server/next#frag", "https://other.example/x"), page.links)
+        }
+    }
+
+    @Test
     fun redirectToDeniedDestinationIsBlocked() = runBlocking {
         assumeMultiProfile()
         TestServer().use { server ->
@@ -101,19 +134,20 @@ class BrowserIsolationInstrumentedTest {
         assumeMultiProfile()
         TestServer().use { server ->
             server.respond(mapOf(
-                "/img-page" to textResponse(
-                    "<html><body>top<img src=\"/img-redir\"></body></html>",
+                // A script, not an image: text renders never fetch images.
+                "/sub-page" to textResponse(
+                    "<html><body>top<script src=\"/sub-redir\"></script></body></html>",
                 ),
                 // The subresource URL itself is allowed; its 302 target is not.
-                "/img-redir" to redirectResponse("/denied-img"),
+                "/sub-redir" to redirectResponse("/denied-sub"),
             ))
-            val page = renderer().load("$server/img-page", timeoutMs = 20_000, extraWaitMs = 1_500)
+            val page = renderer().load("$server/sub-page", timeoutMs = 20_000, extraWaitMs = 1_500)
             assertFalse(page.errorMessage ?: "", page.loadFailed)
             assertTrue(page.text.contains("top"))
             assertTrue("allowed subresource was fetched: ${server.hits}",
-                server.hits.any { it.contains("img-redir") })
+                server.hits.any { it.contains("sub-redir") })
             assertTrue("redirect target must never be fetched: ${server.hits}",
-                server.hits.none { it.contains("denied-img") })
+                server.hits.none { it.contains("denied-sub") })
         }
     }
 
@@ -175,6 +209,42 @@ class BrowserIsolationInstrumentedTest {
         }
     }
 
+    @Test
+    fun rendererDeathFailsTheRenderInsteadOfKillingTheApp() = runBlocking {
+        assumeMultiProfile()
+        assumeTrue(
+            WebViewFeature.isFeatureSupported(WebViewFeature.GET_WEB_VIEW_RENDERER) &&
+                WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_TERMINATE),
+        )
+        TestServer().use { server ->
+            // The stalled script keeps the page loading until the renderer dies
+            // (not an image: text renders never fetch those).
+            server.respond(mapOf("/page" to textResponse("<html><body>p<script src=\"/stall\"></script></body>"), "/stall" to TestServer.STALL))
+            val render = async { renderer().load("$server/page", timeoutMs = 20_000, extraWaitMs = 0) }
+            withTimeout(10_000) { while (server.hits.none { it.startsWith("GET /stall") }) delay(50) }
+            withContext(Dispatchers.Main) {
+                // A profile's WebViews share one renderer: killing the sibling's kills the render's.
+                val sibling = WebView(context)
+                WebViewCompat.setProfile(sibling, BrowserRenderer.PROFILE_NAME)
+                val loaded = CompletableDeferred<Unit>()
+                sibling.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) { loaded.complete(Unit) }
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        view.destroy()
+                        return true
+                    }
+                }
+                sibling.loadDataWithBaseURL(null, "<p>sibling</p>", "text/html", "utf-8", null)
+                loaded.await()
+                assertTrue(WebViewCompat.getWebViewRenderProcess(sibling)!!.terminate())
+            }
+            // Unhandled, the renderer's death would have killed this process before here.
+            val page = render.await()
+            assertTrue(page.loadFailed)
+            assertTrue(page.errorMessage.orEmpty(), page.errorMessage.orEmpty().contains("renderer"))
+        }
+    }
+
     private suspend fun android.webkit.CookieManager.setCookieAwaited(url: String, value: String) =
         // CookieManager wants a Looper thread; runBlocking has none — dispatch to Main.
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
@@ -213,7 +283,9 @@ class BrowserIsolationInstrumentedTest {
                         val requestLine = reader.readLine() ?: return@use
                         hits += requestLine
                         val path = requestLine.split(' ').getOrNull(1) ?: "/"
-                        val reply = routes[path]
+                        val route = routes[path]
+                        if (route == STALL) Thread.sleep(6_000)
+                        val reply = route?.takeIf { it != STALL }
                             ?: "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                         conn.getOutputStream().apply { write(reply.toByteArray()); flush() }
                     }
@@ -234,6 +306,11 @@ class BrowserIsolationInstrumentedTest {
         override fun close() {
             runCatching { socket.close() }
             runCatching { thread.join(2_000) }
+        }
+
+        companion object {
+            /** Route value: stall the (sequential) server 6s, then 404 — keeps a page loading. */
+            const val STALL = "STALL"
         }
     }
 }

@@ -92,11 +92,16 @@ class WorkerForegroundService : Service() {
         )
         // Built-ins are on unless explicitly disabled (empty set = all).
         // Script tools are strictly opt-in (must appear in enabledTools).
-        val builtinTools = listOfNotNull(
-            ytdlp,
+        // Browser tools fail closed without WebView profile isolation; advertising
+        // them there would bill clients for calls that can only fail.
+        val browserTools = if (net.nostr.hench.tools.browser.BrowserRenderer.isolationSupported()) listOf(
             net.nostr.hench.tools.browser.WebFetchTool(applicationContext, store),
             net.nostr.hench.tools.browser.PageScreenshotTool(applicationContext, settings, store),
-        ).filter { it.name !in settings.disabledTools }
+            net.nostr.hench.tools.browser.SiteScrapeTool(applicationContext, settings, store),
+        ) else emptyList<net.nostr.hench.tools.Tool>().also {
+            Log.w(TAG, "WebView lacks isolated profiles (MULTI_PROFILE); browser tools not advertised")
+        }
+        val builtinTools = (listOf(ytdlp) + browserTools).filter { it.name !in settings.disabledTools }
 
         val blossomSelector = net.nostr.hench.blossom.BlossomServerSelector(settings.blossomUrls)
         fun uploadArtifact(file: java.io.File): net.nostr.hench.blossom.BlossomUploadResult {

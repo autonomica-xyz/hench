@@ -20,6 +20,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.net.toUri
 import net.nostr.hench.auth.CookieStore
 import net.nostr.hench.auth.Platform
 import net.nostr.hench.auth.SessionHealth
@@ -278,7 +279,20 @@ class SettingsActivity : Activity() {
             }
         }
         val importStatus = helperText("Drop a zip of <dir>/manifest.json+script.py into /Android/data/net.nostr.hench/files/tools/ or import it here. Script tools run with full app access — only enable tools you trust.")
-        root.addView(section("Advertised tools", "Which tools this worker publishes on Nostr (restart applies)", toolToggles + listOf(
+        // The worker drops browser tools when WebView can't isolate them; say why and how to fix it.
+        val webViewNote: List<android.view.View> = if (net.nostr.hench.tools.browser.BrowserRenderer.isolationSupported()) emptyList() else {
+            val provider = androidx.webkit.WebViewCompat.getCurrentWebViewPackage(this)
+            val id = provider?.packageName ?: "com.google.android.webview"
+            listOf(
+                helperText("Web fetch, page screenshot and site scrape are off: $id ${provider?.versionName.orEmpty()} can't isolate them from your logins. Update it, then restart the worker."),
+                actionButton("Update WebView") {
+                    runCatching { startActivity(Intent(Intent.ACTION_VIEW, "market://details?id=$id".toUri())) }
+                        .recoverCatching { startActivity(Intent(Intent.ACTION_VIEW, "https://play.google.com/store/apps/details?id=$id".toUri())) }
+                        .onFailure { toast("Update $id from your app store") }
+                },
+            )
+        }
+        root.addView(section("Advertised tools", "Which tools this worker publishes on Nostr (restart applies)", toolToggles + webViewNote + listOf(
             actionButton("Import tool (.zip)") {
                 runCatching {
                     startActivityForResult(

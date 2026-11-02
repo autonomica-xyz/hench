@@ -5,7 +5,7 @@
 Hench is a ContextVM worker that lives on your phone, part of
 [autonomica.xyz](https://autonomica.xyz). It offers tools as paid services
 over Nostr — media downloads (powered by yt-dlp), real-browser page fetches,
-and screenshots — plus user-installed Python script tools. A client requests
+screenshots, and whole-site scrapes — plus user-installed Python script tools. A client requests
 a tool call, pays a Lightning invoice, and Hench does the work: it fetches
 the media, uploads the result to a Blossom server, and hands back a link.
 The sats land in the wallet on your phone.
@@ -21,8 +21,8 @@ The sats land in the wallet on your phone.
 1. **Turn the worker on.** One big button. Hench announces itself on Nostr
    relays and starts listening for jobs.
 2. **A client sends a job.** Someone (usually an AI agent) calls one of the
-   advertised tools — `download_media`, `web_fetch`, `page_screenshot`, or an
-   installed script tool. Hench quotes a price in sats.
+   advertised tools — `download_media`, `web_fetch`, `page_screenshot`,
+   `site_scrape`, or an installed script tool. Hench quotes a price in sats.
 3. **They pay, you earn.** Hench creates a Lightning invoice through its
    built-in [Breez Spark](https://spark.money) wallet. Payment settles,
    Hench runs the job, uploads the result to Blossom, and delivers the link.
@@ -46,7 +46,15 @@ Everything runs on the phone — no server to rent, no account to create.
   an offscreen WebView with a real Chromium fingerprint — bot-checked pages
   that datacenter fetchers can't reach. Renders run in an isolated,
   unauthenticated WebView profile, so a paying client never sees your logged-
-  in sessions; private/internal hosts are refused outright.
+  in sessions; private/internal hosts are refused outright. Text renders
+  (`web_fetch`, `site_scrape`) skip images and web fonts and stop waiting once
+  the network goes quiet. `site_scrape` crawls a whole site the same way
+  (same-host links, breadth-first, three pages at a time, up to 50 pages) and
+  delivers every page's title and text as one JSONL file on Blossom, billed
+  per requested page. Isolated profiles need a current
+  WebView — on Android 7–9 that is Chrome, on 10+ Android System WebView.
+  Where the WebView lacks them, the worker doesn't advertise browser tools
+  and Settings links to the WebView update.
 - **Script tools.** Import a ZIP containing `manifest.json` and `script.py`
   through Settings to add a tool running on the bundled Python. Script tools
   have full app access — only enable packages you trust.
