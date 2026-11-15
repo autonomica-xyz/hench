@@ -1,15 +1,24 @@
 package net.nostr.hench.tools.browser
 
 import android.content.Context
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.io.Writer
+import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -32,7 +41,8 @@ import net.nostr.hench.worker.JobRequest
 import net.nostr.hench.worker.PaymentSessionStoreI
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-
+import okhttp3.OkHttpClient
+import okhttp3.Request
 /**
  * The site_scrape MCP tool: crawl a website breadth-first in the on-device
  * browser and deliver every page's title + text as one JSONL file on Blossom.
@@ -51,6 +61,8 @@ class SiteScrapeTool(
     private val store: PaymentSessionStoreI,
     /** Test seam; null renders each page in [renderer]. */
     private val loadPage: (suspend (url: String, timeoutMs: Long) -> BrowserRenderer.Page)? = null,
+    /** Test seam; null fetches robots.txt + sitemaps for crawl seeds. */
+    private val fetchSeeds: (suspend (HttpUrl) -> List<HttpUrl>)? = null,
     private val blossomServerSelector: BlossomServerSelector = BlossomServerSelector(settings.blossomUrls),
     private val upload: suspend (File) -> BlossomUploadResult = { file ->
         uploadVerified(file, blossomServerSelector.serverCandidatesFor(JobRequest("site_scrape", "", DeliveryMode.FULL))) {
@@ -154,12 +166,35 @@ class SiteScrapeTool(
         val queue = ArrayDeque(listOf(start))
         val seen = mutableSetOf(start.toString())
         val rendered = Channel<Triple<HttpUrl, BrowserRenderer.Page?, String?>>(Channel.UNLIMITED)
+        // Sitemap/robots seeds resolve in parallel with the first renders; the
+        // loop below is the only consumer of the queue.
+        val seeds = CompletableDeferred<List<HttpUrl>>()
+        launch {
+            val found = try {
+                when {
+                    fetchSeeds != null -> fetchSeeds.invoke(start)
+                    // JVM tests (context == null): no network, scripted loadPage only.
+                    context == null -> emptyList()
+                    else -> defaultFetchSeeds(start)
+                }
+            } catch (e: TimeoutCancellationException) {
+                // Our seed budget expired — fail open. A real cancellation rethrows.
+                currentCoroutineContext().ensureActive()
+                emptyList()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            seeds.complete(found)
+        }
         var host: String? = null
         var started = 0
         var inFlight = 0
         var scraped = 0
         var failed = 0
         var firstError: String? = null
+        var seedsMerged = false
         while (true) {
             // The start page renders alone (it pins the host); its links fill the queue.
             while (inFlight < CONCURRENCY && queue.isNotEmpty() && started < maxPages) {
@@ -171,6 +206,18 @@ class SiteScrapeTool(
                 launch {
                     val (page, error) = render(next.toString(), minOf(PAGE_TIMEOUT_MS, remainingMs))
                     rendered.send(Triple(next, page, error))
+                }
+            }
+            // Merge seeds once the landing host is known: non-blocking while
+            // renders are in flight; awaited once when the crawl would end.
+            val pinned = host
+            if (pinned != null && !seedsMerged && (seeds.isCompleted || (inFlight == 0 && queue.isEmpty()))) {
+                seedsMerged = true
+                for (seed in seeds.await()) {
+                    val url = normalize(seed.toString()) ?: continue
+                    if (url.host == pinned && !NON_PAGE.containsMatchIn(url.encodedPath) && seen.add(url.toString())) {
+                        queue.addLast(url)
+                    }
                 }
             }
             if (inFlight == 0) break
@@ -261,6 +308,110 @@ class SiteScrapeTool(
             RegexOption.IGNORE_CASE,
         )
         private val JSON = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+        /** Seed discovery is best-effort: robots.txt, then sitemaps, all fail-open. */
+        private const val SEED_TIMEOUT_MS = 15_000L
+        private const val MAX_SEED_SITEMAPS = 3
+        private const val MAX_SEED_BYTES = 512 * 1024
+
+        /** Short-timeout client for seed fetches; redirects off so a sitemap can't bounce off-host. */
+        private val SEED_HTTP: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+
+        /** `Sitemap:` lines of a robots.txt body; http(s) only. */
+        internal fun parseRobotsSitemaps(body: String): List<String> =
+            Regex("""(?im)^\s*sitemap\s*:\s*(\S+)""").findAll(body)
+                .map { it.groupValues[1] }
+                .filter { it.startsWith("http://") || it.startsWith("https://") }
+                .toList()
+
+        /**
+         * `<loc>` entries of a sitemap body, split into (page urls, child
+         * sitemap urls) by the root tag. Regex scan, not an XML parser: a
+         * malformed sitemap just yields fewer seeds and the crawl goes on.
+         */
+        internal fun parseSitemap(body: String): Pair<List<String>, List<String>> {
+            val locs = Regex("""<loc>\s*([^<]+?)\s*</loc>""", RegexOption.IGNORE_CASE)
+                .findAll(body).map { it.groupValues[1].trim().replace("&amp;", "&") }.toList()
+            if (locs.isEmpty()) return emptyList<String>() to emptyList()
+            val isIndex = Regex("""<sitemapindex[\s>]""", RegexOption.IGNORE_CASE).containsMatchIn(body)
+            return if (isIndex) emptyList<String>() to locs else locs to emptyList()
+        }
+
+        /**
+         * robots.txt-declared + /sitemap.xml page URLs on [start]'s host, as
+         * crawl seeds. Every failure (network, parse, policy) just shrinks the
+         * result; this never throws and never leaves [start]'s host.
+         */
+        internal suspend fun defaultFetchSeeds(start: HttpUrl): List<HttpUrl> = withContext(Dispatchers.IO) {
+            withTimeout(SEED_TIMEOUT_MS) {
+                val out = LinkedHashSet<String>()
+                val queue = ArrayDeque<String>()
+                val seenSitemaps = mutableSetOf<String>()
+                fun allowedSitemap(url: HttpUrl): Boolean =
+                    url.host == start.host && BrowserUrlPolicy.check(url.toString()) == null
+                fun enqueue(url: HttpUrl) {
+                    if (queue.size + seenSitemaps.size < MAX_SEED_SITEMAPS && seenSitemaps.add(url.toString())) {
+                        queue.addLast(url.toString())
+                    }
+                }
+                val robots = start.newBuilder().encodedPath("/robots.txt").query(null).fragment(null).build()
+                val robotsUrls = fetchText(robots)?.let(::parseRobotsSitemaps).orEmpty()
+                for (s in robotsUrls) {
+                    s.toHttpUrlOrNull()?.takeIf(::allowedSitemap)?.let(::enqueue)
+                }
+                val fallback = start.newBuilder().encodedPath("/sitemap.xml").query(null).fragment(null).build()
+                if (queue.isEmpty()) enqueue(fallback)
+                while (queue.isNotEmpty() && seenSitemaps.size < MAX_SEED_SITEMAPS) {
+                    val sitemap = queue.removeFirst().toHttpUrlOrNull() ?: continue
+                    val body = fetchText(sitemap) ?: continue
+                    val (pages, children) = parseSitemap(body)
+                    for (page in pages) {
+                        normalize(page)?.takeIf { it.host == start.host }?.let { out += it.toString() }
+                    }
+                    for (child in children) {
+                        child.toHttpUrlOrNull()?.takeIf(::allowedSitemap)?.let(::enqueue)
+                    }
+                }
+                out.mapNotNull(::normalize)
+                    .filter { !NON_PAGE.containsMatchIn(it.encodedPath) }
+                    .take(MAX_PAGES)
+            }
+        }
+
+        /** Body of a same-host seed fetch, or null on any failure; capped + gunzipped. */
+        private fun fetchText(url: HttpUrl): String? = try {
+            SEED_HTTP.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val bytes = response.body.byteStream().use { readCapped(it) }
+                // A small gzip body can still expand hugely; cap the expansion too.
+                val text = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
+                    GZIPInputStream(ByteArrayInputStream(bytes)).use { readCapped(it) }.decodeToString()
+                } else {
+                    bytes.decodeToString()
+                }
+                text
+            }
+        } catch (e: Exception) {
+            null
+        }
+
+        /** First [cap] bytes of [input]; stdlib-only (InputStream.readNBytes needs API 33). */
+        internal fun readCapped(input: InputStream, cap: Int = MAX_SEED_BYTES): ByteArray {
+            val out = ByteArrayOutputStream(cap.coerceAtMost(64 * 1024))
+            val buf = ByteArray(8 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                out.write(buf, 0, minOf(n, cap - out.size()))
+                if (out.size() >= cap) break
+            }
+            return out.toByteArray()
+        }
 
         /** http(s) URL minus its fragment; null for mailto:/javascript:/junk. */
         private fun normalize(url: String): HttpUrl? =

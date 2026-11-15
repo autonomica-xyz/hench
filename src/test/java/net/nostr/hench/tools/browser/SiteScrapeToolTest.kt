@@ -1,5 +1,6 @@
 package net.nostr.hench.tools.browser
 
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -13,6 +14,7 @@ import net.nostr.hench.cvm.IncomingContext
 import net.nostr.hench.cvm.ToolCallContext
 import net.nostr.hench.settings.WorkerSettings
 import net.nostr.hench.tools.ContentBlock
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import net.nostr.hench.worker.InMemoryPaymentSessionStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,7 +41,11 @@ class SiteScrapeToolTest {
     private class Fixture(val tool: SiteScrapeTool, val loaded: MutableList<String>, val uploads: MutableList<String>, val peak: () -> Int)
 
     /** Scripted site; each render takes [renderMs] of virtual time so renders overlap. */
-    private fun fixture(site: Map<String, BrowserRenderer.Page>, renderMs: Long = 0): Fixture {
+    private fun fixture(
+        site: Map<String, BrowserRenderer.Page>,
+        renderMs: Long = 0,
+        fetchSeeds: (suspend (okhttp3.HttpUrl) -> List<okhttp3.HttpUrl>)? = null,
+    ): Fixture {
         val loaded = mutableListOf<String>()
         val uploads = mutableListOf<String>()
         var active = 0
@@ -55,6 +61,7 @@ class SiteScrapeToolTest {
                 active--
                 site.getValue(url)
             },
+            fetchSeeds = fetchSeeds,
             upload = { file ->
                 uploads += file.readText()
                 BlossomUploadResult("https://blossom.test/abc.bin", "ab".repeat(32), file.length(), "application/octet-stream")
@@ -149,5 +156,122 @@ class SiteScrapeToolTest {
         assertEquals(5, run.loaded.size)
         assertEquals(3, run.peak())
         assertEquals(5, run.uploads.single().lines().count { it.isNotBlank() })
+    }
+
+    @Test
+    fun sitemapSeedsAreCrawledAlongsideDiscoveredLinks() = runTest {
+        val run = fixture(
+            mapOf(
+                "https://example.com/" to page("https://example.com/", "https://example.com/a"),
+                "https://example.com/a" to page("https://example.com/a", "https://example.com/b"),
+                "https://example.com/b" to page("https://example.com/b"),
+                "https://example.com/seed" to page("https://example.com/seed"),
+                "https://example.com/a#frag" to page("https://example.com/a#frag"), // dedupes to /a
+            ),
+            fetchSeeds = { listOf("https://example.com/seed".toHttpUrl(), "https://example.com/a#frag".toHttpUrl()) },
+        )
+
+        val result = run.tool.execute(ctx(buildJsonObject { put("url", "https://example.com/") })) {}
+
+        assertFalse(result.isError)
+        // /seed comes from the sitemap; /a#frag normalizes onto the already-seen /a.
+        assertEquals(
+            listOf("https://example.com/", "https://example.com/a", "https://example.com/seed", "https://example.com/b"),
+            run.loaded,
+        )
+        assertEquals(4, run.uploads.single().lines().count { it.isNotBlank() })
+    }
+
+    @Test
+    fun offHostAndNonPageSeedsAreSkipped() = runTest {
+        val run = fixture(
+            mapOf(
+                "https://example.com/" to page("https://example.com/", "https://example.com/a"),
+                "https://example.com/a" to page("https://example.com/a"),
+                "https://example.com/ok" to page("https://example.com/ok"),
+            ),
+            fetchSeeds = {
+                listOf(
+                    "https://other.example/x".toHttpUrl(),
+                    "https://example.com/doc.pdf".toHttpUrl(),
+                    "https://example.com/ok".toHttpUrl(),
+                )
+            },
+        )
+
+        val result = run.tool.execute(ctx(buildJsonObject { put("url", "https://example.com/") })) {}
+
+        assertFalse(result.isError)
+        assertEquals(
+            listOf("https://example.com/", "https://example.com/a", "https://example.com/ok"),
+            run.loaded,
+        )
+    }
+
+    @Test
+    fun throwingFetchSeedsLeavesTheCrawlUnchanged() = runTest {
+        val run = fixture(
+            mapOf(
+                "https://example.com/" to page("https://example.com/", "https://example.com/a"),
+                "https://example.com/a" to page("https://example.com/a"),
+            ),
+            fetchSeeds = { throw RuntimeException("no network in test") },
+        )
+
+        val result = run.tool.execute(ctx(buildJsonObject { put("url", "https://example.com/") })) {}
+
+        assertFalse(result.isError)
+        assertEquals(listOf("https://example.com/", "https://example.com/a"), run.loaded)
+        assertEquals("true", meta(result).getValue("complete").jsonPrimitive.content)
+    }
+
+    @Test
+    fun parseRobotsSitemapsReadsOnlyHttpSitemapLines() {
+        val body = """
+            User-agent: *
+            Disallow: /private
+            Sitemap: https://example.com/sitemap.xml
+            sitemap:https://example.com/news-sitemap.xml
+            Sitemap: ftp://example.com/bad.xml
+            Sitemap: not-a-url
+        """.trimIndent()
+
+        assertEquals(
+            listOf("https://example.com/sitemap.xml", "https://example.com/news-sitemap.xml"),
+            SiteScrapeTool.parseRobotsSitemaps(body),
+        )
+    }
+
+    @Test
+    fun parseSitemapSplitsUrlsetFromIndex() {
+        val urlset = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <url><loc>https://example.com/a</loc></url>
+              <url><loc> https://example.com/b </loc></url>
+            </urlset>
+        """.trimIndent()
+        val (pages, children) = SiteScrapeTool.parseSitemap(urlset)
+        assertEquals(listOf("https://example.com/a", "https://example.com/b"), pages)
+        assertTrue(children.isEmpty())
+
+        val index = """
+            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <sitemap><loc>https://example.com/sitemap-1.xml</loc></sitemap>
+              <sitemap><loc>https://example.com/sitemap-2.xml</loc></sitemap>
+            </sitemapindex>
+        """.trimIndent()
+        val (indexPages, indexChildren) = SiteScrapeTool.parseSitemap(index)
+        assertTrue(indexPages.isEmpty())
+        assertEquals(listOf("https://example.com/sitemap-1.xml", "https://example.com/sitemap-2.xml"), indexChildren)
+    }
+
+    @Test
+    fun readCappedStopsAtCapAndPreservesShortInput() {
+        val big = ByteArrayInputStream(ByteArray(200) { 'x'.code.toByte() })
+        assertEquals(64, SiteScrapeTool.readCapped(big, cap = 64).size)
+
+        val small = ByteArrayInputStream(byteArrayOf(1, 2, 3))
+        assertTrue(SiteScrapeTool.readCapped(small, cap = 64).contentEquals(byteArrayOf(1, 2, 3)))
     }
 }

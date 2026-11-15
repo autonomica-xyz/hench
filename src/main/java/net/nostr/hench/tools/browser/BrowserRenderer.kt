@@ -91,6 +91,8 @@ class BrowserRenderer(
         val errorMessage: String?,
         /** Absolute hrefs of the page's links; only filled by load(collectLinks = true). */
         val links: List<String> = emptyList(),
+        /** Parsed result of load()'s [extractScript]; null when unset or the page failed. */
+        val extracted: JsonElement? = null,
     )
 
     private class Session(
@@ -118,6 +120,10 @@ class BrowserRenderer(
      * Load [url] for its text: images and web fonts are never fetched, and after
      * the page finishes it waits up to [extraWaitMs] for late, network-driven
      * content (see [settle]) plus the optional CSS selector.
+     *
+     * [extractScript] is a bounded JS IIFE returning a JSON-encoded string; its
+     * parsed value lands in [Page.extracted]. Keep the returned payload small —
+     * never extract outerHTML or whole-DOM strings (see note below).
      */
     suspend fun load(
         url: String,
@@ -125,6 +131,7 @@ class BrowserRenderer(
         waitForSelector: String? = null,
         extraWaitMs: Long = 1_200,
         collectLinks: Boolean = false,
+        extractScript: String? = null,
     ): Page = withTimeout(timeoutMs) {
         withContext(mainContext) {
             val session = newSession(textOnly = true)
@@ -137,6 +144,7 @@ class BrowserRenderer(
                 var title = ""
                 var text = ""
                 var links = emptyList<String>()
+                var extracted: JsonElement? = null
                 if (finished.ok) {
                     settle(session, extraWaitMs)
                     if (waitForSelector != null) {
@@ -159,6 +167,9 @@ class BrowserRenderer(
                             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                             .orEmpty()
                     }
+                    if (extractScript != null) {
+                        extracted = evaluateJson(view, extractScript)
+                    }
                 }
                 Page(
                     finalUrl = view.url ?: finalUrl,
@@ -167,6 +178,7 @@ class BrowserRenderer(
                     loadFailed = !finished.ok || session.rendererGone,
                     errorMessage = if (session.rendererGone) RENDERER_GONE else finished.error,
                     links = links,
+                    extracted = extracted,
                 )
             } finally {
                 session.cleanup()

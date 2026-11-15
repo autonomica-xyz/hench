@@ -25,6 +25,7 @@ class BrowserToolsTest {
     }
 
     private fun webFetch() = WebFetchTool(context = null, store = InMemoryPaymentSessionStore())
+    private fun webSearch() = WebSearchTool(context = null, store = InMemoryPaymentSessionStore())
     private fun screenshot() = PageScreenshotTool(
         context = null,
         settings = WorkerSettings(),
@@ -109,13 +110,14 @@ class BrowserToolsTest {
     fun inputSchemasAreValidJson() {
         Json.parseToJsonElement(webFetch().inputSchema().toString())
         Json.parseToJsonElement(screenshot().inputSchema().toString())
+        Json.parseToJsonElement(webSearch().inputSchema().toString())
     }
 
     @Test
-    fun registryPublishesBothBrowserTools() {
-        val registry = net.nostr.hench.tools.ToolRegistry(webFetch(), screenshot())
+    fun registryPublishesBrowserTools() {
+        val registry = net.nostr.hench.tools.ToolRegistry(webFetch(), screenshot(), webSearch())
         val published = registry.toolsPublishJson()
-        for (name in listOf("web_fetch", "page_screenshot")) {
+        for (name in listOf("web_fetch", "page_screenshot", "web_search")) {
             assertTrue(published.contains(name))
         }
     }

@@ -98,6 +98,7 @@ class WorkerForegroundService : Service() {
             net.nostr.hench.tools.browser.WebFetchTool(applicationContext, store),
             net.nostr.hench.tools.browser.PageScreenshotTool(applicationContext, settings, store),
             net.nostr.hench.tools.browser.SiteScrapeTool(applicationContext, settings, store),
+            net.nostr.hench.tools.browser.WebSearchTool(applicationContext, store),
         ) else emptyList<net.nostr.hench.tools.Tool>().also {
             Log.w(TAG, "WebView lacks isolated profiles (MULTI_PROFILE); browser tools not advertised")
         }
