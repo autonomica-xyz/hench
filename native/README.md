@@ -8,10 +8,12 @@ neighboring checkouts required.
 
 - `contextvm-sdk/` — byte-identical snapshot of `hench-cli/vendor/contextvm-sdk`
   (upstream `github.com/nostr-net/rs-sdk` @ `2cf7e6c`, MIT, Kosti Rytkönen),
-  plus the vendored diffs: `lru` 0.12→0.18 and the nostr 0.44→0.45.5 port
-  (`ContextVmSigner` replaces the removed `NostrSigner`). Payment-initiation
-  failures return a correlated error instead of leaving clients waiting;
-  private processor diagnostics remain server-side.
+  plus the vendored diffs: `lru` 0.12→0.18, the nostr 0.44→0.45.5 port
+  (`ContextVmSigner` replaces the removed `NostrSigner`), and the rmcp
+  optional dep dropped (RUSTSEC-2026-0462; nothing in this repo uses the
+  SDK's rmcp transports). Payment-initiation failures return a correlated
+  error instead of leaving clients waiting; private processor diagnostics
+  remain server-side.
 - `contextvm-ffi/` — `contextvm-ffi` crate from the same upstream revision,
   repathed to the vendored SDK (`path = "../contextvm-sdk"`) and ported to the
   0.45 signer/notification API (`Arc<dyn ContextVmSigner>`,

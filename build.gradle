@@ -1,7 +1,7 @@
 plugins {
     // AGP 9 provides built-in Kotlin support — do not apply
     // org.jetbrains.kotlin.android separately.
-    id 'com.android.application' version '9.4.1'
+    id 'com.android.application' version '9.5.1'
     // Kotlinx serialization compiler plugin; version must match the Kotlin
     // Gradle plugin (built-in Kotlin runtime, auto-upgraded to 2.4.21 here).
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.4.21'
@@ -119,7 +119,7 @@ dependencies {
 
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"
-    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0"
     implementation "com.squareup.okhttp3:okhttp:5.5.1"
 
     // UniFFI Kotlin binding for libcontextvm_ffi (generated, uses JNA).
@@ -136,11 +136,11 @@ dependencies {
 
     // Local AARs do not carry POM dependencies; keep the wrappers' JVM
     // dependencies explicit instead of restoring their vulnerable old pins.
-    implementation "com.fasterxml.jackson.core:jackson-databind:2.22.4"
+    implementation "com.fasterxml.jackson.core:jackson-databind:2.23.0"
     implementation "commons-io:commons-io:2.22.0"
     implementation "org.apache.commons:commons-compress:1.28.0"
     implementation "org.tukaani:xz:1.12"
-    implementation "com.github.luben:zstd-jni:1.5.7-25@aar"
+    implementation "com.github.luben:zstd-jni:1.5.7-26@aar"
 
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0"
