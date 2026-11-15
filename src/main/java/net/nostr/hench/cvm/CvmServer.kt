@@ -97,6 +97,7 @@ class CvmServer(
                 profileMetadataJson = null,
                 paymentTtlCapSecs = paymentTtlCapSecs,
                 executionBudgetSecs = executionBudgetSecs,
+                freeCallers = settings.freeCallerPubkeys.mapNotNull { net.nostr.hench.identity.normalizePubkeyToHex(it) },
             ),
         )
         server = s

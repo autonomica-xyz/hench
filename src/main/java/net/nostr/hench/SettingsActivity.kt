@@ -130,6 +130,14 @@ class SettingsActivity : Activity() {
             publicKey,
             identityActions,
         )))
+        val freeCallers = field(
+            "Free callers (npub or hex, one per line/comma)",
+            settings.freeCallerPubkeys.joinToString(","),
+            singleLine = false,
+        )
+        root.addView(section("Payment bypass", "Listed pubkeys skip the payment gate — their tool calls run without an invoice. For your own keys only.", listOf(
+            labeled("Free callers", freeCallers, "Accepts npub1… or 64-char hex, comma/newline separated."),
+        )))
 
         val acceptAudio = checkbox("Accept audio jobs", settings.acceptAudio)
         val acceptVideo = checkbox("Accept video jobs", settings.acceptVideo)
@@ -350,6 +358,10 @@ class SettingsActivity : Activity() {
             useCookies = useCookies.isChecked,
             disabledTools = disabledToolsState.toSet(),
             enabledScriptTools = enabledScriptsState.toSet(),
+            freeCallerPubkeys = freeCallers.text.toString()
+                .split(',', '\n')
+                .map { it.trim() }
+                .filter { it.isNotBlank() },
             // Platform settings persist via CookieStore, not SharedPreferences fields
             allowedPlatforms = emptyList(),
             blockedPlatforms = emptyList(),

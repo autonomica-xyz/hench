@@ -5033,9 +5033,9 @@ public object FfiConverterTypeDiscoveredTool: FfiConverterRustBuffer<DiscoveredT
  * An incoming MCP request (server-side).
  *
  * NOTE: the SDK's `contextvm_sdk::IncomingRequest` also carries an
- * `event: Option<nostr_sdk::Event>` field (the full client-signed event). It
+ * `event: Option<nostr_sdk::prelude::Event>` field (the full client-signed event). It
  * is intentionally NOT mirrored here: no FFI consumer needs the raw Nostr
- * event today, and `nostr_sdk::Event` (with its `Tags` collection) is
+ * event today, and `nostr_sdk::prelude::Event` (with its `Tags` collection) is
  * non-trivial to expose across the C ABI + UniFFI. Add an `Event` mirror and a
  * field here when a foreign consumer needs `sig` / event binding.
  */
@@ -5456,6 +5456,13 @@ data class ServerConfig (
      * Used by `Server::start()` to derive request/session timeouts when payments are enabled.
      */
     var `executionBudgetSecs`: kotlin.ULong
+    , 
+    /**
+     * Operator allowlist: client pubkeys (lowercase hex) whose `tools/call`
+     * requests skip the payment gate entirely. Kotlin normalizes npub/hex
+     * entries to hex before passing them here.
+     */
+    var `freeCallers`: List<kotlin.String> = listOf() 
     
 ){
     
@@ -5493,6 +5500,7 @@ public object FfiConverterTypeServerConfig: FfiConverterRustBuffer<ServerConfig>
             FfiConverterOptionalString.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterSequenceString.read(buf),
         )
     }
 
@@ -5517,7 +5525,8 @@ public object FfiConverterTypeServerConfig: FfiConverterRustBuffer<ServerConfig>
             FfiConverterBoolean.allocationSize(value.`publishRelayList`) +
             FfiConverterOptionalString.allocationSize(value.`profileMetadataJson`) +
             FfiConverterULong.allocationSize(value.`paymentTtlCapSecs`) +
-            FfiConverterULong.allocationSize(value.`executionBudgetSecs`)
+            FfiConverterULong.allocationSize(value.`executionBudgetSecs`) +
+            FfiConverterSequenceString.allocationSize(value.`freeCallers`)
     )
 
     override fun write(value: ServerConfig, buf: ByteBuffer) {
@@ -5542,6 +5551,7 @@ public object FfiConverterTypeServerConfig: FfiConverterRustBuffer<ServerConfig>
             FfiConverterOptionalString.write(value.`profileMetadataJson`, buf)
             FfiConverterULong.write(value.`paymentTtlCapSecs`, buf)
             FfiConverterULong.write(value.`executionBudgetSecs`, buf)
+            FfiConverterSequenceString.write(value.`freeCallers`, buf)
     }
 }
 

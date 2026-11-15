@@ -68,6 +68,8 @@ Everything runs on the phone — no server to rent, no account to create.
   price per job, and working hours — all configurable in Settings.
 - **Open coordination.** Jobs and results flow over Nostr; files are
   stored on Blossom servers. No middleman, no platform fee.
+- **Free callers.** Operators can whitelist their own npub(s) in Settings so
+  their tool calls skip the payment invoice entirely.
 
 ## Getting started
 

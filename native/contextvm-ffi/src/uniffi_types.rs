@@ -169,6 +169,11 @@ pub struct ServerConfig {
     /// Estimated maximum execution budget (seconds) for a paid request.
     /// Used by `Server::start()` to derive request/session timeouts when payments are enabled.
     pub execution_budget_secs: u64,
+    /// Operator allowlist: client pubkeys (lowercase hex) whose `tools/call`
+    /// requests skip the payment gate entirely. Kotlin normalizes npub/hex
+    /// entries to hex before passing them here.
+    #[uniffi(default)]
+    pub free_callers: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -195,6 +200,7 @@ impl Default for ServerConfig {
             profile_metadata_json: None,
             payment_ttl_cap_secs: crate::builders::DEFAULT_PAYMENT_TTL_CAP_SECS,
             execution_budget_secs: crate::builders::DEFAULT_EXECUTION_BUDGET_SECS,
+            free_callers: Vec::new(),
         }
     }
 }
@@ -970,6 +976,12 @@ impl Server {
             event_queue_bound: 64,
             policy: crate::payment_gate::PaymentLifecyclePolicy::Transparent,
             priced_capabilities: gate_caps,
+            free_callers: pending_config
+                .free_callers
+                .iter()
+                .map(|p| p.trim().to_lowercase())
+                .filter(|p| !p.is_empty())
+                .collect(),
         };
 
         let result = global_runtime().block_on(async move {

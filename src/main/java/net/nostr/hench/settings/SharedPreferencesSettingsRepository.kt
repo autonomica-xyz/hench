@@ -52,6 +52,7 @@ class SharedPreferencesSettingsRepository(context: Context) {
             workerName = prefs.getString(KEY_WORKER_NAME, null)?.takeIf { it.isNotBlank() },
             disabledTools = (prefs.getStringSet(KEY_DISABLED_TOOLS, emptySet()) ?: emptySet()).toSet(),
             enabledScriptTools = (prefs.getStringSet(KEY_ENABLED_SCRIPT_TOOLS, emptySet()) ?: emptySet()).toSet(),
+            freeCallerPubkeys = decodeCsvList(prefs.getString(KEY_FREE_CALLER_PUBKEYS, "")!!),
         ).withBuiltInSparkDefaults(
             bundledApiKey = BuildConfig.BREEZ_SPARK_API_KEY,
             seedFactory = ::generateSparkSeedHex,
@@ -97,6 +98,7 @@ class SharedPreferencesSettingsRepository(context: Context) {
             putString(KEY_WORKER_NAME, settings.workerName.orEmpty())
             putStringSet(KEY_DISABLED_TOOLS, settings.disabledTools)
             putStringSet(KEY_ENABLED_SCRIPT_TOOLS, settings.enabledScriptTools)
+            putString(KEY_FREE_CALLER_PUBKEYS, encodeCsvList(settings.freeCallerPubkeys))
             when (val hours = settings.hoursOfOperation) {
                 HoursOfOperation.Always -> putBoolean(KEY_HOURS_ALWAYS, true)
                 is HoursOfOperation.Daily -> {
@@ -143,6 +145,7 @@ class SharedPreferencesSettingsRepository(context: Context) {
         const val KEY_WORKER_NAME = "worker_name"
         const val KEY_DISABLED_TOOLS = "disabled_tools"
         const val KEY_ENABLED_SCRIPT_TOOLS = "enabled_script_tools"
+        const val KEY_FREE_CALLER_PUBKEYS = "free_caller_pubkeys"
     }
 
     private fun loadPlatformList(key: String): List<Platform> {
@@ -153,3 +156,9 @@ class SharedPreferencesSettingsRepository(context: Context) {
             .mapNotNull { runCatching { Platform.valueOf(it) }.getOrNull() }
     }
 }
+
+/** SharedPreferences stores free-caller pubkeys as a comma-joined string. */
+internal fun encodeCsvList(values: List<String>): String = values.joinToString(",")
+
+internal fun decodeCsvList(raw: String): List<String> =
+    raw.split(',').map { it.trim() }.filter { it.isNotBlank() }

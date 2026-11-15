@@ -1,5 +1,6 @@
 package net.nostr.hench.identity
 
+
 object Bech32 {
     private const val CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
     private val GENERATORS = intArrayOf(0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)
@@ -72,4 +73,24 @@ object Bech32 {
         }
         return ret
     }
+}
+
+/**
+ * Normalize a user-entered Nostr pubkey to lowercase hex.
+ * Accepts 64-char hex (any case, optional 0x) or an `npub1…` bech32 string.
+ * Returns null when the input is neither.
+ */
+fun normalizePubkeyToHex(entry: String): String? {
+    val trimmed = entry.trim()
+    if (trimmed.isEmpty()) return null
+    val hexCandidate = trimmed.removePrefix("0x")
+    if (hexCandidate.length == 64 && hexCandidate.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+        return hexCandidate.lowercase()
+    }
+    if (trimmed.startsWith("npub1", ignoreCase = true)) {
+        return runCatching { Bech32.decode("npub", trimmed).toHex() }
+            .getOrNull()
+            ?.takeIf { it.length == 64 }
+    }
+    return null
 }

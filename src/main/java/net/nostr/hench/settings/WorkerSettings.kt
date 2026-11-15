@@ -59,6 +59,13 @@ data class WorkerSettings(
 
     /** User-installed script tools turned ON (strictly opt-in; empty = none). */
     val enabledScriptTools: Set<String> = emptySet(),
+
+    /**
+     * Operator allowlist: npub or hex pubkeys whose calls skip the CEP-8
+     * payment gate entirely. Stored raw; normalized to lowercase hex when
+     * passed to the FFI ServerConfig.
+     */
+    val freeCallerPubkeys: List<String> = emptyList(),
 ) {
     fun supports(mode: DeliveryMode): Boolean {
         return when (mode) {

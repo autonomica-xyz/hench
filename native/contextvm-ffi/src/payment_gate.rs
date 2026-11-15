@@ -145,6 +145,10 @@ pub struct PaymentGateConfig {
     pub policy: PaymentLifecyclePolicy,
     /// Capabilities that require payment.
     pub priced_capabilities: Vec<PricedCapability>,
+    /// Client pubkeys (lowercase hex) whose `tools/call` requests bypass the
+    /// payment gate entirely — forwarded straight to execution like a settled
+    /// payment would be, with no park, no gate event, no notification.
+    pub free_callers: std::collections::HashSet<String>,
 }
 
 impl Default for PaymentGateConfig {
@@ -158,6 +162,7 @@ impl Default for PaymentGateConfig {
             event_queue_bound: 64,
             policy: PaymentLifecyclePolicy::Transparent,
             priced_capabilities: Vec::new(),
+            free_callers: std::collections::HashSet::new(),
         }
     }
 }
@@ -360,6 +365,14 @@ impl PaymentGate {
         if config.event_queue_bound == 0 {
             config.event_queue_bound = 1;
         }
+        // Normalize allowlist entries to lowercase hex so membership checks
+        // against `ctx.client_pubkey` are case-insensitive.
+        config.free_callers = config
+            .free_callers
+            .iter()
+            .map(|p| p.trim().to_lowercase())
+            .filter(|p| !p.is_empty())
+            .collect();
 
         let (events_tx, events_rx) = tokio::sync::mpsc::channel(config.event_queue_bound);
 
@@ -649,6 +662,15 @@ impl PaymentGate {
         };
         let canonical_key = canonical_key_for(&identity);
         let lifecycle = self.lifecycle_from_context(ctx);
+
+        // Free callers (operator allowlist) bypass the gate entirely: forward
+        // straight to execution exactly like a settled payment would — same
+        // canonical-id stamp, no park, no gate event, no notification.
+        if self.is_free_caller(ctx) {
+            next.set_canonical_invocation_id(canonical_key.clone());
+            return next.run(JsonRpcMessage::Request(request)).await;
+        }
+
         let now = tokio::time::Instant::now();
 
         // Fast path: a live local entry already exists.
@@ -669,6 +691,14 @@ impl PaymentGate {
             next,
         )
         .await
+    }
+
+    /// Lowercase-hex client pubkey membership check against `config.free_callers`.
+    fn is_free_caller(&self, ctx: &InboundContext) -> bool {
+        self.inner
+            .config
+            .free_callers
+            .contains(ctx.client_pubkey.trim().to_lowercase().as_str())
     }
 
     fn parked_snapshot(
@@ -1777,6 +1807,7 @@ mod tests {
                 currency_unit: "sats".into(),
                 description: "Echo capability".into(),
             }],
+            free_callers: std::collections::HashSet::new(),
         }
     }
 
@@ -2036,6 +2067,62 @@ mod tests {
             .handle_inner(tools_call("2", "unknown"), &ctx, boxed_next(recorder))
             .await;
         assert!(forwarded);
+        assert!(gate.try_recv().is_none());
+    }
+
+    #[tokio::test]
+    async fn free_caller_bypasses_gate() {
+        let transport = Arc::new(FakeTransport::new());
+        let mut config = test_config(PaymentLifecyclePolicy::Transparent);
+        config.free_callers = ["aabbcc".to_string()].into_iter().collect();
+        let gate = PaymentGate::new(config, transport.clone()).unwrap();
+
+        // Free caller: priced request forwards immediately, no park, no event.
+        let (_next1, recorder1) = FakeNext::new();
+        let ctx = make_context("aabbcc", "e1", None);
+        let forwarded = gate
+            .handle_inner(tools_call("1", "echo"), &ctx, boxed_next(recorder1.clone()))
+            .await;
+        assert!(forwarded);
+        assert!(recorder1.lock().unwrap().is_some());
+        assert!(gate.try_recv().is_none());
+        assert!(transport.records().is_empty());
+
+        // Repeat call also bypasses (no grant bookkeeping needed).
+        let (_next2, recorder2) = FakeNext::new();
+        let ctx2 = make_context("aabbcc", "e2", None);
+        let forwarded = gate
+            .handle_inner(tools_call("2", "echo"), &ctx2, boxed_next(recorder2.clone()))
+            .await;
+        assert!(forwarded);
+        assert!(recorder2.lock().unwrap().is_some());
+        assert!(gate.try_recv().is_none());
+
+        // Non-listed caller still parks and emits a gate event.
+        let (_next3, recorder3) = FakeNext::new();
+        let ctx3 = make_context("deadbeef", "e3", None);
+        let forwarded = gate
+            .handle_inner(tools_call("3", "echo"), &ctx3, boxed_next(recorder3))
+            .await;
+        assert!(!forwarded);
+        assert!(gate.try_recv().is_some());
+    }
+
+    #[tokio::test]
+    async fn free_caller_match_is_case_insensitive() {
+        let transport = Arc::new(FakeTransport::new());
+        let mut config = test_config(PaymentLifecyclePolicy::Transparent);
+        config.free_callers = ["AABBCC".to_string()].into_iter().collect();
+        let gate = PaymentGate::new(config, transport).unwrap();
+
+        let (_next, recorder) = FakeNext::new();
+        // Config entry is uppercase; the incoming pubkey is lowercase hex.
+        let ctx = make_context("AABBCC", "e1", None);
+        let forwarded = gate
+            .handle_inner(tools_call("1", "echo"), &ctx, boxed_next(recorder.clone()))
+            .await;
+        assert!(forwarded);
+        assert!(recorder.lock().unwrap().is_some());
         assert!(gate.try_recv().is_none());
     }
 
